@@ -14,6 +14,8 @@ use crate::bot::{self, Bot};
 use crate::font::{Font, TextBuf};
 use crate::framebuffer::{Canvas, Color, Screen};
 use crate::input::Action;
+use crate::mouse::MouseEvent;
+use crate::pointer::Pointer;
 use crate::interrupts::TICK_HZ;
 use crate::serial_println;
 use crate::sound::{Effect, Sound};
@@ -90,6 +92,15 @@ pub struct App {
     shown_secs: u64,
     /// When to next refresh the "thinking" progress line.
     next_progress: u64,
+    /// Mouse pointer position; `None` until the mouse is first used.
+    mouse_at: Option<(usize, usize)>,
+    /// The left button was down in the last mouse packet.
+    left_down: bool,
+    /// The intersection under the pointer, last time it moved.
+    hovered: Option<Point>,
+    pointer: Pointer,
+    /// The pointer moved since it was last drawn.
+    pointer_moved: bool,
 }
 
 impl App {
@@ -117,6 +128,11 @@ impl App {
             clock_mark: 0,
             shown_secs: 0,
             next_progress: 0,
+            mouse_at: None,
+            left_down: false,
+            hovered: None,
+            pointer: Pointer::new(),
+            pointer_moved: false,
         }
     }
 
@@ -125,6 +141,37 @@ impl App {
         match self.mode {
             Mode::Start => self.handle_start(action),
             Mode::Game => self.handle_game(action, now),
+        }
+    }
+
+    /// Moves the pointer; hovering over the board moves the cursor there and
+    /// a left click acts like Space on that point.
+    pub fn handle_mouse(&mut self, event: MouseEvent, now: u64) {
+        let (w, h) = (self.screen.width() as isize, self.screen.height() as isize);
+        let (x, y) = self.mouse_at.map_or((w / 2, h / 2), |(x, y)| (x as isize, y as isize));
+        let x = (x + event.dx as isize).clamp(0, w - 1) as usize;
+        let y = (y - event.dy as isize).clamp(0, h - 1) as usize;
+        self.mouse_at = Some((x, y));
+        self.pointer_moved = true;
+
+        let clicked = event.left && !self.left_down;
+        self.left_down = event.left;
+        if self.mode != Mode::Game {
+            return;
+        }
+        let hovered = self.layout.point_at(x, y).map(|(col, row)| Point::new(col, row));
+        // Follow the pointer only when it reaches a new intersection, so a
+        // nudge doesn't undo cursor moves made with the keyboard.
+        if let Some(p) = hovered
+            && (hovered != self.hovered || clicked)
+            && p != self.cursor
+        {
+            self.cursor = p;
+            self.dirty = true;
+        }
+        self.hovered = hovered;
+        if clicked && hovered.is_some() {
+            self.handle(Action::Place, now);
         }
     }
 
@@ -153,6 +200,7 @@ impl App {
         let size = SIZES[self.size_choice];
         self.game.reset(size);
         self.layout = Layout::new(self.screen.width(), self.screen.height(), size);
+        self.hovered = None;
         self.cursor = Point::new(size / 2, size / 2);
         self.notice = None;
         self.clocks = [0; 2];
@@ -299,12 +347,20 @@ impl App {
             self.notice = None;
             self.dirty = true;
         }
-        if self.dirty {
-            self.dirty = false;
-            match self.mode {
-                Mode::Start => self.render_start(),
-                Mode::Game => self.render_game(),
+        if self.dirty || self.pointer_moved {
+            // Take the pointer off the screen while drawing under it.
+            self.pointer.hide(&mut self.screen);
+            if self.dirty {
+                self.dirty = false;
+                match self.mode {
+                    Mode::Start => self.render_start(),
+                    Mode::Game => self.render_game(),
+                }
             }
+            if let Some((x, y)) = self.mouse_at {
+                self.pointer.show(&mut self.screen, x, y);
+            }
+            self.pointer_moved = false;
         }
     }
 

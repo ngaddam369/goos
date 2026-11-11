@@ -9,7 +9,11 @@ mod framebuffer;
 mod gdt;
 mod input;
 mod interrupts;
+mod mouse;
 mod pit;
+mod pointer;
+mod ps2;
+mod queue;
 mod serial;
 mod sound;
 mod ui;
@@ -35,8 +39,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let screen = Screen::new(fb);
     serial_println!("framebuffer {}x{} {:?}", screen.width(), screen.height(), screen.format());
 
-    interrupts::init();
+    let has_mouse = interrupts::init();
+    serial_println!("mouse: {}", if has_mouse { "found" } else { "none" });
     let mut keyboard = input::Keyboard::new();
+    let mut mouse = mouse::Mouse::new();
     let mut app = app::App::new(screen);
     loop {
         let now = ticks();
@@ -44,6 +50,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             if let Some(action) = input::action(key) {
                 app.handle(action, now);
             }
+        }
+        while let Some(event) = mouse.next_event() {
+            app.handle_mouse(event, now);
         }
         app.update(now);
         if !app.busy() {
@@ -56,7 +65,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 fn idle() {
     use x86_64::instructions::interrupts;
     interrupts::disable();
-    if input::is_empty() {
+    if input::is_empty() && mouse::is_empty() {
         // `sti; hlt` back to back: an interrupt can't slip in between.
         interrupts::enable_and_hlt();
     } else {

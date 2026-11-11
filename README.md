@@ -74,7 +74,8 @@ Environment variables for the runner:
 | ← → on the start screen | change it (N also cycles the size 9 → 13 → 19) |
 | Enter / Space | start the game |
 | Arrow keys / WASD | move the cursor |
-| Space / Enter | place a stone |
+| Mouse | point at an intersection to move the cursor there |
+| Space / Enter / left click | place a stone |
 | P | pass |
 | U | undo |
 | N | back to the start screen (Esc returns to the current game) |
@@ -83,7 +84,7 @@ After both players pass in a row, the game enters **scoring mode**:
 
 | Key | Action |
 |---|---|
-| Space | mark or unmark the group under the cursor as dead |
+| Space / left click | mark or unmark the group under the cursor as dead |
 | Enter | confirm the score and end the game |
 | Esc | resume play |
 | U | undo the last pass (after confirming: back to scoring) |
@@ -104,6 +105,10 @@ while scoring). Clocks restart with a new game; undo doesn't give time back.
 **Sound:** placing a stone clicks on the PC speaker, a capture plays a lower,
 longer tone and an illegal move a 220 Hz buzz. Without an audio backend QEMU
 simply runs silently.
+
+**Mouse:** a PS/2 mouse works too. In the QEMU window, click once to let
+QEMU capture the mouse (it is a relative PS/2 mouse, so QEMU has to grab
+it) and press Ctrl+Alt+G to release it again.
 
 ## Playing the computer
 
@@ -163,6 +168,15 @@ redraws. Moves and the computer's estimated win rate are logged to serial.
   (including the extended ones for the arrow keys) with `pc-keyboard` and
   maps them to game actions. When there is nothing to do, the CPU sleeps with
   `hlt` until the next interrupt.
+- **Mouse** (`ps2.rs`, `mouse.rs`, `pointer.rs`). At boot the 8042
+  controller's auxiliary port is enabled with its interrupt (IRQ12, which
+  reaches the first PIC through the cascade line IRQ2) and the mouse is
+  told to report movement. The IRQ12 handler queues raw bytes like the
+  keyboard handler does; the main loop assembles 3-byte packets (re-syncing
+  on the bit that is always set in the first byte). The pointer is drawn
+  straight onto the screen after saving the pixels underneath, and taken
+  off again before anything is redrawn there. Without a mouse the kernel
+  just carries on with the keyboard.
 - **Drawing** (`framebuffer.rs`, `font.rs`, `ui.rs`). Primitives handle both
   RGB and BGR framebuffers and any stride. Stones and text are anti-aliased.
   To avoid flicker without a full back buffer, each board intersection (and

@@ -112,6 +112,14 @@ impl Layout {
         }
     }
 
+    /// The intersection whose cell contains screen position (x, y), if any.
+    pub fn point_at(&self, x: usize, y: usize) -> Option<(usize, usize)> {
+        let half = self.cell / 2;
+        let col = (x + half).checked_sub(self.origin_x)? / self.cell.max(1);
+        let row = (y + half).checked_sub(self.origin_y)? / self.cell.max(1);
+        (col < self.size && row < self.size).then_some((col, row))
+    }
+
     /// Screen position of the intersection at (col, row); row 0 is the top.
     pub fn intersection(&self, col: usize, row: usize) -> (usize, usize) {
         (self.origin_x + col * self.cell, self.origin_y + row * self.cell)
