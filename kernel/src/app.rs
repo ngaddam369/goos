@@ -15,6 +15,7 @@ use crate::framebuffer::{Canvas, Color, Screen};
 use crate::input::Action;
 use crate::interrupts::TICK_HZ;
 use crate::serial_println;
+use crate::sound::{Effect, Sound};
 use crate::ui::{self, Layout, PointView};
 
 /// The game lives in a static, built at compile time: with its undo
@@ -62,6 +63,13 @@ pub struct App {
     dirty: bool,
     /// The whole screen must be repainted (new game or mode switch).
     repaint: bool,
+    sound: Sound,
+    /// Thinking time used by black and white, in ticks.
+    clocks: [u64; 2],
+    /// Tick up to which the clocks have been charged.
+    clock_mark: u64,
+    /// Seconds shown on the running clock at the last render.
+    shown_secs: u64,
 }
 
 impl App {
@@ -80,6 +88,10 @@ impl App {
             panel: [const { None }; MAX_PANEL_LINES],
             dirty: true,
             repaint: true,
+            sound: Sound::new(),
+            clocks: [0; 2],
+            clock_mark: 0,
+            shown_secs: 0,
         }
     }
 
@@ -110,6 +122,7 @@ impl App {
         self.layout = Layout::new(self.screen.width(), self.screen.height(), size);
         self.cursor = Point::new(size / 2, size / 2);
         self.notice = None;
+        self.clocks = [0; 2];
         self.mode = Mode::Game;
         self.has_game = true;
         self.repaint = true;
@@ -167,10 +180,13 @@ impl App {
                 let coord = coordinate(p, self.game.size());
                 serial_println!("{} {} (captured {})", name(player), coord.as_str(), info.captured);
                 self.notice = None;
+                let effect = if info.captured > 0 { Effect::Capture } else { Effect::Click };
+                self.sound.play(effect, now);
             }
             Err(e) => {
                 serial_println!("illegal: {}", e.message());
                 self.set_timed_notice(e.message(), now);
+                self.sound.play(Effect::Illegal, now);
             }
         }
     }
@@ -188,8 +204,24 @@ impl App {
         self.cursor = Point::new(col as usize, row as usize);
     }
 
-    /// Expires timed messages and redraws whatever changed.
+    /// Runs the clocks, ends finished beeps, expires timed messages and
+    /// redraws whatever changed.
     pub fn update(&mut self, now: u64) {
+        self.sound.update(now);
+
+        // Only the player to move uses time, and only during play.
+        let elapsed = now.saturating_sub(self.clock_mark);
+        self.clock_mark = now;
+        if self.mode == Mode::Game && self.game.phase() == Phase::Playing {
+            let clock = &mut self.clocks[self.game.to_move() as usize];
+            *clock += elapsed;
+            let secs = *clock / TICK_HZ;
+            if secs != self.shown_secs {
+                self.shown_secs = secs;
+                self.dirty = true;
+            }
+        }
+
         if let Some(Notice { until, .. }) = self.notice
             && now >= until
         {
@@ -207,30 +239,44 @@ impl App {
 
     fn render_start(&mut self) {
         let screen = &mut self.screen;
+        let title = self.layout.title_font;
+        let text = self.layout.text_font;
+        let line_h = text.line_height() * 2;
+        let scale = if screen.height() >= 1000 { 4 } else { 3 };
+        let title_h = title.line_height() * scale + 16;
+        let title_y = screen.height() / 4;
+        let top = title_y + title_h;
+
+        // The static parts are only drawn once, so key presses don't make
+        // them flash.
         if self.repaint {
             self.repaint = false;
             screen.clear(ui::BACKGROUND);
             // The board will need a full repaint after this screen.
             self.drawn = [None; MAX_SIZE * MAX_SIZE];
             self.panel = [const { None }; MAX_PANEL_LINES];
+
+            // Big title flanked by a black and a white stone.
+            ui::centered_line_scaled(screen, title_y, title_h, "GoOS", title, ui::TEXT, scale);
+            let r = (title_h * 3 / 10) as isize;
+            let reach = (title.text_width("GoOS") * scale / 2) as isize + 2 * r;
+            let (cx, cy) = ((screen.width() / 2) as isize, (title_y + title_h / 2) as isize);
+            ui::draw_stone(screen, cx - reach, cy, r, Player::Black, 255);
+            ui::draw_stone(screen, cx + reach, cy, r, Player::White, 255);
+            ui::centered_line(screen, top, line_h, "Go on bare metal", text, ui::DIM_TEXT);
+            ui::centered_line(screen, top + 2 * line_h, line_h, "Board size", text, ui::TEXT);
         }
-        let title = self.layout.title_font;
-        let text = self.layout.text_font;
-        let line_h = text.line_height() * 2;
-        let top = screen.height() / 3;
-        ui::centered_line(screen, top, line_h, "GoOS", title, ui::TEXT);
-        ui::centered_line(screen, top + line_h, line_h, "Go on bare metal", text, ui::DIM_TEXT);
-        ui::centered_line(screen, top + 3 * line_h, line_h, "Board size", text, ui::TEXT);
+
         let size = SIZES[self.size_choice];
         let mut choice = Line::new();
         let _ = write!(choice, "<  {size} x {size}  >");
-        ui::centered_line(screen, top + 4 * line_h, line_h, choice.as_str(), title, ui::ACCENT);
+        ui::centered_line(screen, top + 3 * line_h, line_h, choice.as_str(), title, ui::ACCENT);
         let help = if self.has_game {
             "Left/Right or N: change size    Enter: start    Esc: back"
         } else {
             "Left/Right or N: change size    Enter: start"
         };
-        ui::centered_line(screen, top + 6 * line_h, line_h, help, text, ui::DIM_TEXT);
+        ui::centered_line(screen, top + 5 * line_h, line_h, help, text, ui::DIM_TEXT);
     }
 
     fn render_game(&mut self) {
@@ -290,6 +336,10 @@ impl App {
             ui::DIM_TEXT,
             format_args!("Captures  B {}  W {}", game.captures(Player::Black), game.captures(Player::White)),
         );
+        let (mut black, mut white) = (TextBuf::<12>::new(), TextBuf::<12>::new());
+        write_clock(&mut black, self.clocks[0]);
+        write_clock(&mut white, self.clocks[1]);
+        put(6, ui::DIM_TEXT, format_args!("Time  B {}  W {}", black.as_str(), white.as_str()));
         if let Some(n) = &self.notice {
             put(7, ui::WARNING, format_args!("{}", n.text.as_str()));
         } else if let (Phase::Playing, true, Some((who, Move::Pass))) =
@@ -374,6 +424,13 @@ fn coordinate(p: Point, size: usize) -> TextBuf<4> {
 /// Writes a half-point count such as 15 as "7.5".
 fn write_half_points(out: &mut impl Write, half: i32) {
     let _ = if half % 2 == 0 { write!(out, "{}", half / 2) } else { write!(out, "{}.5", half / 2) };
+}
+
+/// Writes a tick count as "m:ss" (or "h:mm:ss").
+fn write_clock(out: &mut impl Write, ticks: u64) {
+    let secs = ticks / TICK_HZ;
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    let _ = if h > 0 { write!(out, "{h}:{m:02}:{s:02}") } else { write!(out, "{m}:{s:02}") };
 }
 
 fn write_result(out: &mut Line, score: &Score, finished: bool) {

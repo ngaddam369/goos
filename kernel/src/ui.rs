@@ -249,7 +249,7 @@ fn draw_cursor(canvas: &mut impl Canvas, cell: usize) {
 
 /// Draws a stone in a single pass, so a translucent (dead) stone blends
 /// cleanly with what's underneath.
-fn draw_stone(canvas: &mut impl Canvas, cx: isize, cy: isize, r: isize, stone: Player, alpha: u8) {
+pub fn draw_stone(canvas: &mut impl Canvas, cx: isize, cy: isize, r: isize, stone: Player, alpha: u8) {
     let rim_width = (r / 14).max(1);
     let (rim, body) = match stone {
         Player::Black => (BLACK_EDGE, BLACK_STONE),
@@ -289,10 +289,24 @@ pub fn panel_line(screen: &mut Screen, layout: &Layout, line: usize, text: &str,
 /// Draws one line of text centred horizontally on the screen, replacing a
 /// band of background `line_h` pixels tall at `y`.
 pub fn centered_line(screen: &mut Screen, y: usize, line_h: usize, text: &str, font: Font, color: Color) {
+    centered_line_scaled(screen, y, line_h, text, font, color, 1);
+}
+
+/// `centered_line` with the text enlarged `scale` times.
+pub fn centered_line_scaled(
+    screen: &mut Screen,
+    y: usize,
+    line_h: usize,
+    text: &str,
+    font: Font,
+    color: Color,
+    scale: usize,
+) {
     let width = screen.width().min(1600).min(TILE_PIXELS / line_h.max(1));
     let mut tile = TILE.lock();
     tile.reset(width, line_h, BACKGROUND);
-    let x = width.saturating_sub(font.text_width(text)) / 2;
-    font::draw_text(&mut *tile, x, line_h.saturating_sub(font.line_height()) / 2, text, font, color);
+    let x = width.saturating_sub(font.text_width(text) * scale) / 2;
+    let text_y = line_h.saturating_sub(font.line_height() * scale) / 2;
+    font::draw_text_scaled(&mut *tile, x, text_y, text, font, color, scale);
     screen.blit((screen.width() - width) / 2, y, &tile);
 }

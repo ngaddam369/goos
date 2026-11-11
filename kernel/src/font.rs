@@ -34,6 +34,12 @@ impl Font {
 /// Draws `text` with its top-left corner at (x, y), blending the glyphs'
 /// anti-aliased edges into whatever is already on screen.
 pub fn draw_text(canvas: &mut impl Canvas, x: usize, y: usize, text: &str, font: Font, color: Color) {
+    draw_text_scaled(canvas, x, y, text, font, color, 1);
+}
+
+/// Like `draw_text`, with every glyph pixel drawn as a `scale` x `scale`
+/// block (for big titles).
+pub fn draw_text_scaled(canvas: &mut impl Canvas, x: usize, y: usize, text: &str, font: Font, color: Color, scale: usize) {
     let mut cx = x;
     for ch in text.chars() {
         let glyph = get_raster(ch, font.weight, font.height)
@@ -41,11 +47,13 @@ pub fn draw_text(canvas: &mut impl Canvas, x: usize, y: usize, text: &str, font:
         if let Some(glyph) = glyph {
             for (gy, row) in glyph.rows().enumerate() {
                 for (gx, &intensity) in row.iter().enumerate() {
-                    canvas.blend_pixel(cx + gx, y + gy, color, intensity);
+                    for (sx, sy) in (0..scale * scale).map(|i| (i % scale, i / scale)) {
+                        canvas.blend_pixel(cx + gx * scale + sx, y + gy * scale + sy, color, intensity);
+                    }
                 }
             }
         }
-        cx += font.char_width();
+        cx += font.char_width() * scale;
     }
 }
 

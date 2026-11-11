@@ -10,6 +10,7 @@ mod input;
 mod interrupts;
 mod pit;
 mod serial;
+mod sound;
 mod ui;
 
 use bootloader_api::{BootInfo, BootloaderConfig, entry_point};
@@ -62,6 +63,8 @@ fn idle() {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    // Don't leave a beep sounding forever.
+    pit::speaker_off();
     serial::print_panic(format_args!("KERNEL PANIC: {info}\n"));
     loop {
         x86_64::instructions::interrupts::disable();

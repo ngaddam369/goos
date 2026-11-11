@@ -1,12 +1,14 @@
 //! Host-side launcher: boots the GoOS disk image in QEMU.
 //!
-//! Usage: `cargo run --release [-- bios|uefi]` (BIOS is the default).
+//! Usage: `cargo run --release [-- bios|uefi|images]` (BIOS is the default;
+//! `images` just prints where the disk images are).
 //!
 //! Environment variables:
 //! - `GOOS_AUDIO=pipewire|pa|none`  force an audio backend for the PC speaker
 //! - `GOOS_DEBUG=1`                 software emulation + interrupt log in qemu.log
 //! - `GOOS_HEADLESS=1`              no window; QEMU monitor on a unix socket
 //! - `GOOS_MONITOR=<path>`          monitor socket path (default target/goos-monitor.sock)
+//! - `GOOS_OVMF=<path>`             UEFI firmware image for `uefi` (default: search known paths)
 
 use std::env;
 use std::fs::OpenOptions;
@@ -14,20 +16,32 @@ use std::path::Path;
 use std::process::{Command, exit};
 
 const QEMU: &str = "qemu-system-x86_64";
-const OVMF: &str = "/usr/share/edk2/x64/OVMF.4m.fd";
+/// Where distributions install the combined OVMF (UEFI) firmware image.
+const OVMF_PATHS: &[&str] = &[
+    "/usr/share/edk2/x64/OVMF.4m.fd",    // Arch (edk2-ovmf)
+    "/usr/share/ovmf/OVMF.fd",           // Debian/Ubuntu (ovmf)
+    "/usr/share/OVMF/OVMF.fd",
+    "/usr/share/edk2/ovmf/OVMF.fd",      // some Fedora versions
+    "/usr/share/qemu/ovmf-x86_64.bin",   // openSUSE
+];
 
 fn main() {
     let uefi = match env::args().nth(1).as_deref() {
         None | Some("bios") => false,
         Some("uefi") => true,
+        Some("images") => {
+            println!("BIOS image: {}", env!("BIOS_PATH"));
+            println!("UEFI image: {}", env!("UEFI_PATH"));
+            return;
+        }
         Some(other) => {
-            eprintln!("unknown boot mode {other:?}; expected `bios` or `uefi`");
+            eprintln!("unknown argument {other:?}; expected `bios`, `uefi` or `images`");
             exit(2);
         }
     };
 
     if Command::new(QEMU).arg("--version").output().is_err() {
-        eprintln!("{QEMU} not found. On Arch: sudo pacman -S qemu-system-x86 qemu-ui-gtk qemu-audio-pipewire");
+        eprintln!("{QEMU} not found; install QEMU (see README.md)");
         exit(1);
     }
 
@@ -42,11 +56,14 @@ fn main() {
     cmd.args(["-m", "256M", "-serial", "stdio", "-no-reboot"]);
 
     if uefi {
-        if !Path::new(OVMF).exists() {
-            eprintln!("UEFI firmware {OVMF} not found (install edk2-ovmf)");
+        let firmware = env::var("GOOS_OVMF")
+            .ok()
+            .or_else(|| OVMF_PATHS.iter().find(|p| Path::new(p).exists()).map(|p| p.to_string()));
+        let Some(firmware) = firmware else {
+            eprintln!("no UEFI firmware found; install OVMF or set GOOS_OVMF to OVMF.fd");
             exit(1);
-        }
-        cmd.args(["-bios", OVMF]);
+        };
+        cmd.arg("-bios").arg(firmware);
         cmd.arg("-drive").arg(format!("format=raw,file={}", env!("UEFI_PATH")));
     } else {
         cmd.arg("-drive").arg(format!("format=raw,file={}", env!("BIOS_PATH")));
