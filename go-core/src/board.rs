@@ -87,6 +87,9 @@ impl IllegalMove {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MoveInfo {
     pub captured: u16,
+    /// If the move took a single stone in a ko shape, the point where the
+    /// opponent may not immediately recapture.
+    pub ko: Option<Point>,
 }
 
 /// A set of points, as a bitset over point indices.
@@ -283,20 +286,41 @@ impl Board {
         next.set(p, Cell::Stone(color));
 
         let mut captured = 0;
+        let mut last_captured = p;
         for n in self.neighbors(p) {
             if next.get(n) == Cell::Stone(color.opponent()) {
                 let (group, liberties) = next.flood(n);
                 if liberties == 0 {
                     captured += next.remove_group(&group);
+                    last_captured = n;
                 }
             }
         }
-        if next.liberties(p) == 0 {
+        let (own_group, own_liberties) = next.flood(p);
+        if own_liberties == 0 {
             return Err(IllegalMove::Suicide);
         }
+        // Ko: one stone captured by a lone stone left in atari.
+        let ko = (captured == 1 && own_liberties == 1 && own_group.len() == 1).then_some(last_captured);
         next.captures[color.index()] += captured;
         *self = next;
-        Ok(MoveInfo { captured })
+        Ok(MoveInfo { captured, ko })
+    }
+
+    /// Whether `color` may play at `p` under the basic rules (on the board,
+    /// empty, not suicide). Ko and superko are not considered. Cheaper than
+    /// `play`, as nothing is copied.
+    pub fn is_legal(&self, p: Point, color: Color) -> bool {
+        if !self.contains(p) || self.get(p) != Cell::Empty {
+            return false;
+        }
+        self.neighbors(p).any(|n| match self.get(n) {
+            Cell::Empty => true,
+            // Joining a friendly group that keeps another liberty.
+            Cell::Stone(c) if c == color => self.liberties(n) > 1,
+            // Capturing an opponent group in atari.
+            Cell::Stone(_) => self.liberties(n) == 1,
+        })
     }
 }
 
@@ -436,6 +460,57 @@ mod tests {
         assert_eq!(info.captured, 1);
         assert_eq!(board.get(p(2, 1)), Cell::Empty);
         assert_eq!(board.liberties(p(1, 1)), 1);
+    }
+
+    #[test]
+    fn ko_point_is_reported() {
+        let mut board = diagram(
+            "
+            . X O . .
+            X O . O .
+            . X O . .
+            . . . . .
+            . . . . .",
+        );
+        let info = board.play(p(2, 1), B).unwrap();
+        assert_eq!(info.ko, Some(p(1, 1)));
+        // A normal capture is not a ko.
+        let mut board = diagram(
+            "
+            . X .
+            X O .
+            . X .",
+        );
+        assert_eq!(board.play(p(2, 1), B).unwrap().ko, None);
+    }
+
+    #[test]
+    fn is_legal_matches_play() {
+        let boards = [
+            "
+            . X .
+            X . X
+            . X .",
+            "
+            O X O .
+            X . X .
+            . X . .
+            . . . .",
+            "
+            O O X
+            . X .
+            X . .",
+        ];
+        for text in boards {
+            let board = diagram(text);
+            for pt in board.points() {
+                for color in [B, W] {
+                    let mut copy = board;
+                    let expected = copy.play(pt, color).is_ok();
+                    assert_eq!(board.is_legal(pt, color), expected, "{pt:?} {color:?} in {text}");
+                }
+            }
+        }
     }
 
     #[test]

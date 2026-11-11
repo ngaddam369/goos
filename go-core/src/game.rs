@@ -34,6 +34,7 @@ struct Snapshot {
     passes: u8,
     last: Option<(Color, Move)>,
     move_number: u16,
+    ko: Option<Point>,
 }
 
 pub struct Game {
@@ -43,6 +44,8 @@ pub struct Game {
     passes: u8,
     last: Option<(Color, Move)>,
     move_number: u16,
+    /// Where the player to move may not retake a ko right now.
+    ko: Option<Point>,
     phase: Phase,
     dead: PointSet,
     komi_half: u16,
@@ -61,10 +64,11 @@ impl Game {
             passes: 0,
             last: None,
             move_number: 0,
+            ko: None,
             phase: Phase::Playing,
             dead: PointSet::new(),
             komi_half: DEFAULT_KOMI_HALF,
-            history: [Snapshot { board, to_move: Color::Black, passes: 0, last: None, move_number: 0 }; HISTORY],
+            history: [Snapshot { board, to_move: Color::Black, passes: 0, last: None, move_number: 0, ko: None }; HISTORY],
             history_len: 0,
         }
     }
@@ -81,6 +85,7 @@ impl Game {
         self.passes = 0;
         self.last = None;
         self.move_number = 0;
+        self.ko = None;
         self.phase = Phase::Playing;
         self.dead = PointSet::new();
         self.history_len = 0;
@@ -121,6 +126,12 @@ impl Game {
         self.passes
     }
 
+    /// The point the player to move may not play because it would retake
+    /// a ko immediately (superko catches longer cycles via `check`).
+    pub fn ko(&self) -> Option<Point> {
+        self.ko
+    }
+
     pub fn komi_half(&self) -> u16 {
         self.komi_half
     }
@@ -130,6 +141,22 @@ impl Game {
     }
 
     pub fn play(&mut self, p: Point) -> Result<MoveInfo, IllegalMove> {
+        let (next, info) = self.try_play(p)?;
+        self.save_snapshot();
+        self.board = next;
+        self.passes = 0;
+        self.ko = info.ko;
+        self.finish_turn(Move::Play(p));
+        Ok(info)
+    }
+
+    /// Whether the player to move may play at `p`, without playing it.
+    pub fn check(&self, p: Point) -> Result<(), IllegalMove> {
+        self.try_play(p).map(|_| ())
+    }
+
+    /// The position after playing `p`, if that's legal.
+    fn try_play(&self, p: Point) -> Result<(Board, MoveInfo), IllegalMove> {
         if self.phase != Phase::Playing {
             return Err(IllegalMove::NotPlaying);
         }
@@ -144,12 +171,7 @@ impl Game {
         if let Some(i) = earlier.iter().rposition(repeats) {
             return Err(if i + 1 == self.history_len { IllegalMove::Ko } else { IllegalMove::Superko });
         }
-
-        self.save_snapshot();
-        self.board = next;
-        self.passes = 0;
-        self.finish_turn(Move::Play(p));
-        Ok(info)
+        Ok((next, info))
     }
 
     pub fn pass(&mut self) -> Result<(), IllegalMove> {
@@ -158,6 +180,7 @@ impl Game {
         }
         self.save_snapshot();
         self.passes += 1;
+        self.ko = None;
         self.finish_turn(Move::Pass);
         if self.passes >= 2 {
             self.phase = Phase::Scoring;
@@ -183,6 +206,7 @@ impl Game {
             passes: self.passes,
             last: self.last,
             move_number: self.move_number,
+            ko: self.ko,
         };
         self.history_len += 1;
     }
@@ -205,6 +229,7 @@ impl Game {
         self.passes = s.passes;
         self.last = s.last;
         self.move_number = s.move_number;
+        self.ko = s.ko;
         self.phase = Phase::Playing;
         self.dead = PointSet::new();
         true
@@ -215,6 +240,7 @@ impl Game {
         if self.phase == Phase::Scoring {
             self.phase = Phase::Playing;
             self.passes = 0;
+            self.ko = None;
             self.dead = PointSet::new();
         }
     }
@@ -279,6 +305,7 @@ mod tests {
     fn simple_ko_rejected_then_allowed_after_a_move_elsewhere() {
         let mut game = ko_game();
         assert_eq!(game.play(p(2, 1)).unwrap().captured, 1);
+        assert_eq!(game.ko(), Some(p(1, 1)));
         // White may not retake straight away.
         assert_eq!(game.play(p(1, 1)), Err(IllegalMove::Ko));
         assert_eq!(game.to_move(), W, "a rejected move doesn't change the turn");
@@ -316,6 +343,7 @@ mod tests {
         assert_eq!(game.move_number(), 1);
 
         assert!(game.undo());
+        assert_eq!(game.ko(), None);
         assert_eq!(*game.board(), board_before);
         assert_eq!(game.captures(B), 0);
         assert_eq!(game.to_move(), B);

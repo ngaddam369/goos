@@ -10,6 +10,7 @@ use core::fmt::Write;
 use go_core::{Cell, Color as Player, Game, MAX_SIZE, Move, Phase, Point, Score};
 use spin::{Mutex, MutexGuard};
 
+use crate::bot::{self, Bot};
 use crate::font::{Font, TextBuf};
 use crate::framebuffer::{Canvas, Color, Screen};
 use crate::input::Action;
@@ -23,6 +24,16 @@ use crate::ui::{self, Layout, PointView};
 static GAME: Mutex<Game> = Mutex::new(Game::new(19));
 
 const SIZES: [usize; 3] = [9, 13, 19];
+
+/// Who plays the other side.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Opponent {
+    Human,
+    /// The computer plays this colour.
+    Computer(Player),
+}
+
+const OPPONENTS: [Opponent; 3] = [Opponent::Human, Opponent::Computer(Player::White), Opponent::Computer(Player::Black)];
 /// How long an illegal-move message stays up.
 const NOTICE_TICKS: u64 = TICK_HZ * 3 / 2;
 const MAX_PANEL_LINES: usize = 24;
@@ -49,6 +60,13 @@ pub struct App {
     mode: Mode,
     /// Index into `SIZES` of the size picked on the start screen.
     size_choice: usize,
+    /// Index into `OPPONENTS` of the opponent picked on the start screen.
+    opponent_choice: usize,
+    /// Which start screen row (0: size, 1: opponent) the arrows change.
+    start_row: usize,
+    /// The opponent in the current game.
+    opponent: Opponent,
+    bot: Bot,
     /// A game has been started (so Esc on the start screen returns to it).
     has_game: bool,
     layout: Layout,
@@ -80,6 +98,10 @@ impl App {
             game: GAME.lock(),
             mode: Mode::Start,
             size_choice: 2,
+            opponent_choice: 0,
+            start_row: 0,
+            opponent: Opponent::Human,
+            bot: Bot::new(bot::seed()),
             has_game: false,
             layout,
             cursor: Point::new(9, 9),
@@ -104,9 +126,17 @@ impl App {
     }
 
     fn handle_start(&mut self, action: Action) {
+        let cycle = |v: &mut usize, len: usize, step: usize| *v = (*v + step) % len;
         match action {
-            Action::Left | Action::Up => self.size_choice = (self.size_choice + SIZES.len() - 1) % SIZES.len(),
-            Action::Right | Action::Down | Action::NewGame => self.size_choice = (self.size_choice + 1) % SIZES.len(),
+            Action::Up | Action::Down => self.start_row = 1 - self.start_row,
+            Action::Left | Action::Right => {
+                let step = if action == Action::Right { 1 } else { 2 };
+                match self.start_row {
+                    0 => cycle(&mut self.size_choice, SIZES.len(), step),
+                    _ => cycle(&mut self.opponent_choice, OPPONENTS.len(), step),
+                }
+            }
+            Action::NewGame => cycle(&mut self.size_choice, SIZES.len(), 1),
             Action::Place | Action::Confirm => self.start_game(),
             Action::Escape if self.has_game => {
                 self.mode = Mode::Game;
@@ -123,6 +153,8 @@ impl App {
         self.cursor = Point::new(size / 2, size / 2);
         self.notice = None;
         self.clocks = [0; 2];
+        self.opponent = OPPONENTS[self.opponent_choice];
+        self.bot.cancel();
         self.mode = Mode::Game;
         self.has_game = true;
         self.repaint = true;
@@ -136,7 +168,10 @@ impl App {
             Action::Down => self.move_cursor(0, 1),
             Action::Left => self.move_cursor(-1, 0),
             Action::Right => self.move_cursor(1, 0),
-            Action::Place | Action::Confirm if phase == Phase::Playing => self.play(now),
+            Action::Place | Action::Confirm | Action::Pass if phase == Phase::Playing && self.computer_to_move() => {
+                self.set_timed_notice("The computer is thinking", now);
+            }
+            Action::Place | Action::Confirm if phase == Phase::Playing => self.play(self.cursor, now),
             Action::Place if phase == Phase::Scoring => {
                 self.game.toggle_dead(self.cursor);
             }
@@ -147,13 +182,12 @@ impl App {
                 write_result(&mut result, &score, true);
                 serial_println!("game over: {}", result.as_str());
             }
-            Action::Pass if phase == Phase::Playing => {
-                serial_println!("{} passes", name(self.game.to_move()));
-                let _ = self.game.pass();
-                self.notice = None;
-            }
+            Action::Pass if phase == Phase::Playing => self.pass(),
             Action::Undo => {
+                self.bot.cancel();
                 if self.game.undo() {
+                    // Against the computer, go back to the human's turn.
+                    while self.game.phase() == Phase::Playing && self.computer_to_move() && self.game.undo() {}
                     serial_println!("undo");
                     self.notice = None;
                 } else {
@@ -165,6 +199,7 @@ impl App {
                 self.notice = None;
             }
             Action::NewGame => {
+                self.bot.cancel();
                 self.mode = Mode::Start;
                 self.repaint = true;
             }
@@ -172,9 +207,18 @@ impl App {
         }
     }
 
-    fn play(&mut self, now: u64) {
+    fn computer_to_move(&self) -> bool {
+        self.opponent == Opponent::Computer(self.game.to_move())
+    }
+
+    fn pass(&mut self) {
+        serial_println!("{} passes", name(self.game.to_move()));
+        let _ = self.game.pass();
+        self.notice = None;
+    }
+
+    fn play(&mut self, p: Point, now: u64) {
         let player = self.game.to_move();
-        let p = self.cursor;
         match self.game.play(p) {
             Ok(info) => {
                 let coord = coordinate(p, self.game.size());
@@ -208,6 +252,18 @@ impl App {
     /// redraws whatever changed.
     pub fn update(&mut self, now: u64) {
         self.sound.update(now);
+
+        if self.mode == Mode::Game
+            && self.game.phase() == Phase::Playing
+            && self.computer_to_move()
+            && let Some(mv) = self.bot.think(&self.game, now)
+        {
+            match mv {
+                Move::Play(p) => self.play(p, now),
+                Move::Pass => self.pass(),
+            }
+            self.dirty = true;
+        }
 
         // Only the player to move uses time, and only during play.
         let elapsed = now.saturating_sub(self.clock_mark);
@@ -265,18 +321,29 @@ impl App {
             ui::draw_stone(screen, cx + reach, cy, r, Player::White, 255);
             ui::centered_line(screen, top, line_h, "Go on bare metal", text, ui::DIM_TEXT);
             ui::centered_line(screen, top + 2 * line_h, line_h, "Board size", text, ui::TEXT);
+            ui::centered_line(screen, top + 4 * line_h, line_h, "Opponent", text, ui::TEXT);
         }
 
-        let size = SIZES[self.size_choice];
-        let mut choice = Line::new();
-        let _ = write!(choice, "<  {size} x {size}  >");
-        ui::centered_line(screen, top + 3 * line_h, line_h, choice.as_str(), title, ui::ACCENT);
-        let help = if self.has_game {
-            "Left/Right or N: change size    Enter: start    Esc: back"
-        } else {
-            "Left/Right or N: change size    Enter: start"
+        // The selected row is highlighted and shows arrows.
+        let mut value = |row: usize, args: core::fmt::Arguments| {
+            let mut line = Line::new();
+            let selected = row == self.start_row;
+            let _ = if selected { write!(line, "<  {args}  >") } else { write!(line, "{args}") };
+            let color = if selected { ui::ACCENT } else { ui::TEXT };
+            ui::centered_line(screen, top + (3 + 2 * row) * line_h, line_h, line.as_str(), title, color);
         };
-        ui::centered_line(screen, top + 5 * line_h, line_h, help, text, ui::DIM_TEXT);
+        let size = SIZES[self.size_choice];
+        value(0, format_args!("{size} x {size}"));
+        match OPPONENTS[self.opponent_choice] {
+            Opponent::Human => value(1, format_args!("Human")),
+            Opponent::Computer(c) => value(1, format_args!("Computer plays {}", name(c))),
+        }
+        let help = if self.has_game {
+            "Up/Down: choose    Left/Right: change    Enter: start    Esc: back"
+        } else {
+            "Up/Down: choose    Left/Right: change    Enter: start"
+        };
+        ui::centered_line(screen, top + 7 * line_h, line_h, help, text, ui::DIM_TEXT);
     }
 
     fn render_game(&mut self) {
@@ -324,8 +391,12 @@ impl App {
         put(0, ui::TEXT, format_args!("GoOS"));
         let mut komi = Line::new();
         write_half_points(&mut komi, game.komi_half() as i32);
-        put(1, ui::DIM_TEXT, format_args!("{size}x{size}   komi {}", komi.as_str()));
+        let versus = if self.opponent == Opponent::Human { "" } else { "   vs computer" };
+        put(1, ui::DIM_TEXT, format_args!("{size}x{size}   komi {}{versus}", komi.as_str()));
         match game.phase() {
+            Phase::Playing if self.opponent == Opponent::Computer(game.to_move()) => {
+                put(3, ui::TEXT, format_args!("{} (computer) thinking...", name(game.to_move())))
+            }
             Phase::Playing => put(3, ui::TEXT, format_args!("{} to play", name(game.to_move()))),
             Phase::Scoring => put(3, ui::ACCENT, format_args!("Scoring: mark dead stones")),
             Phase::Finished => put(3, ui::ACCENT, format_args!("Game over")),

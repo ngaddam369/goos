@@ -3,6 +3,7 @@
 #![feature(abi_x86_interrupt)]
 
 mod app;
+mod bot;
 mod font;
 mod framebuffer;
 mod gdt;
