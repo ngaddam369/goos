@@ -14,6 +14,7 @@ bench = false
 
 [dependencies]
 bootloader_api = "0.11.17"
+noto-sans-mono-bitmap = { version = "0.4.0", default-features = false, features = ["regular", "bold", "size_16", "size_24", "size_32", "unicode-basic-latin"] }
 pc-keyboard = "0.9.0"
 pic8259 = "0.11.0"
 spin = "0.12.3"
