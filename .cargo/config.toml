@@ -1,0 +1,4 @@
+# The runner depends on the kernel as an artifact dependency (built for
+# x86_64-unknown-none). That cargo feature is still unstable.
+[unstable]
+bindeps = true

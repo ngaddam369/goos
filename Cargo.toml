@@ -1,0 +1,11 @@
+[workspace]
+resolver = "3"
+members = ["go-core", "kernel", "runner"]
+# `cargo run` at the root builds the disk image and launches QEMU.
+default-members = ["runner"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
