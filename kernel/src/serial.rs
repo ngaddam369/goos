@@ -3,7 +3,7 @@
 use core::fmt::{self, Write};
 
 use spin::Mutex;
-use uart_16550::{Config, Uart16550Tty, backend::PioBackend};
+use uart_16550::{BaudRate, Config, Uart16550Tty, backend::PioBackend};
 use x86_64::instructions::interrupts;
 
 const COM1: u16 = 0x3F8;
@@ -13,7 +13,9 @@ static SERIAL: Mutex<Option<Uart16550Tty<PioBackend>>> = Mutex::new(None);
 pub fn init() {
     // SAFETY: COM1 is the standard serial port on PC hardware and QEMU, and
     // nothing else in the kernel touches these I/O ports.
-    let port = unsafe { Uart16550Tty::new_port(COM1, Config::default()) };
+    // Printing runs with interrupts off, so use the fastest common baud rate.
+    let config = Config { baud_rate: BaudRate::Baud115200, ..Config::DEFAULT };
+    let port = unsafe { Uart16550Tty::new_port(COM1, config) };
     // If there's no working UART, printing is silently skipped.
     *SERIAL.lock() = port.ok();
 }
