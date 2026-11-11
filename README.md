@@ -4,7 +4,8 @@ A small x86_64 kernel written in Rust that boots straight into a game of
 [Go](https://en.wikipedia.org/wiki/Go_(game)). There is no operating system
 underneath: the kernel sets up its own interrupts, reads the PS/2 keyboard,
 draws on the framebuffer and runs the game. Two players share one keyboard
-(hotseat) on a 9×9, 13×13 or 19×19 board, with full rules and area scoring.
+(hotseat) on a 9×9, 13×13 or 19×19 board, with full rules and area scoring,
+or one player takes on a Monte Carlo tree search computer opponent.
 
 ![A 19x19 game in progress](docs/game-19x19.png)
 
@@ -69,7 +70,8 @@ Environment variables for the runner:
 
 | Key | Action |
 |---|---|
-| ← → / ↑ ↓ (or N) on the start screen | choose board size 9 → 13 → 19 |
+| ↑ ↓ on the start screen | choose a setting (board size or opponent) |
+| ← → on the start screen | change it (N also cycles the size 9 → 13 → 19) |
 | Enter / Space | start the game |
 | Arrow keys / WASD | move the cursor |
 | Space / Enter | place a stone |
@@ -102,6 +104,39 @@ while scoring). Clocks restart with a new game; undo doesn't give time back.
 **Sound:** placing a stone clicks on the PC speaker, a capture plays a lower,
 longer tone and an illegal move a 220 Hz buzz. Without an audio backend QEMU
 simply runs silently.
+
+## Playing the computer
+
+Pick "Computer plays White" (or Black) as the opponent on the start
+screen. The computer thinks for about 2 seconds per move on 9×9, 3 on
+13×13 and 5 on 19×19; the panel counts its playouts as it goes, and you
+can still move the cursor meanwhile. Undo takes back its reply together
+with your move. It passes once you have passed and it is already ahead on
+the board, and it gives up (passes) when even its best move almost never
+wins in its playouts; after
+two passes you mark dead stones and confirm the score as usual. It is
+tuned for 9×9: on 19×19 it gets far fewer playouts per move and plays
+weakly.
+
+The engine (in `go-core`) was built up in three steps, all still there and
+tested:
+
+1. `random_bot`: a random legal move that never fills its own eyes.
+2. `FlatMc`: flat Monte Carlo, giving every candidate move random playouts
+   in turn and playing the best win rate.
+3. `Mcts`: Monte Carlo tree search with UCB1 (what the game uses). Each
+   iteration walks down a tree of moves picking the child with the best
+   `mean + C·sqrt(ln N / n)`, grows the tree at leaves that have been
+   visited a few times, plays the rest of the game out randomly and
+   records the result along the path. All arithmetic is integer or 16.16
+   fixed point (the kernel has no floating point): ln comes from a
+   bit-by-bit log2, and 1/sqrt(n) from a table built at compile time. The
+   tree lives in a fixed pool of 262,144 nodes (4 MiB) in a static.
+
+The random number generator (xorshift64*) is seeded from the CPU's cycle
+counter (`rdtsc`), so games differ from boot to boot. Thinking runs in
+slices of about 8 ms from the main loop, between keyboard handling and
+redraws. Moves and the computer's estimated win rate are logged to serial.
 
 ## How it works
 

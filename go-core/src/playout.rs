@@ -31,10 +31,20 @@ pub fn is_eye(board: &Board, p: Point, color: Color) -> bool {
 
 /// A uniformly random empty point for which `accept` holds, or `None`.
 ///
-/// Lazy Fisher-Yates: pick a random candidate; if it's rejected, swap it
-/// out of the candidate list and pick again. Every acceptable point is
-/// equally likely, and each point is tested at most once.
+/// First a few tries at random points (rejection sampling: uniform over
+/// the acceptable points, and fast while there are many of them). If those
+/// all miss, lazy Fisher-Yates over the empty points: pick a random
+/// candidate; if it's rejected, swap it out of the list and pick again, so
+/// each point is tested at most once.
 fn random_empty_point(board: &Board, rng: &mut Rng, mut accept: impl FnMut(Point) -> bool) -> Option<Point> {
+    let size = board.size();
+    for _ in 0..16 {
+        let i = rng.below(size * size);
+        let p = Point::new(i % size, i / size);
+        if board.get(p) == Cell::Empty && accept(p) {
+            return Some(p);
+        }
+    }
     let mut candidates = [Point::new(0, 0); MAX_SIZE * MAX_SIZE];
     let mut n = 0;
     for p in board.points() {
@@ -280,6 +290,31 @@ mod tests {
         for (i, &c) in counts.iter().enumerate().skip(4) {
             assert!((850..1150).contains(&c), "point {i} picked {c} times");
         }
+    }
+
+    #[test]
+    fn rare_moves_are_uniform_too() {
+        // Only three acceptable points for white among many empty black
+        // eyes, so the random tries nearly always miss and the fallback
+        // picks the move.
+        let board = diagram(
+            "
+            . X . X . X .
+            X X X X X X X
+            . X . X . X .
+            X X X X X X X
+            . X . X . X .
+            X X X X X X X
+            O O O . . . O",
+        );
+        let mut rng = Rng::new(12);
+        let mut counts = [0u32; 3];
+        for _ in 0..3000 {
+            let m = random_move(&board, W, None, &mut rng).unwrap();
+            assert_eq!(m.row, 6);
+            counts[m.col as usize - 3] += 1;
+        }
+        assert!(counts.iter().all(|&c| (850..1150).contains(&c)), "{counts:?}");
     }
 
     #[test]

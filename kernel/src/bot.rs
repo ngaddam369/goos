@@ -1,9 +1,10 @@
 //! The computer opponent. `think` is called on every pass of the main loop
-//! while it's the computer's turn. Each call runs Monte Carlo playouts for
-//! a few milliseconds and returns, so the keyboard and screen stay
+//! while it's the computer's turn. Each call runs Monte Carlo tree search
+//! for a few milliseconds and returns, so the keyboard and screen stay
 //! responsive while it thinks.
 
-use go_core::{FlatMc, Game, Move};
+use go_core::{Game, Mcts, Move, Node};
+use spin::{Mutex, MutexGuard};
 
 use crate::interrupts::{TICK_HZ, ticks};
 use crate::serial_println;
@@ -13,6 +14,11 @@ use crate::serial_println;
 const MIN_DELAY: u64 = TICK_HZ * 2 / 5;
 /// Work done per `think` call before returning to the main loop.
 const SLICE: u64 = TICK_HZ / 125;
+
+/// Search tree storage: 4 MiB of zeroed nodes, so it lives in `.bss`
+/// rather than in the kernel image.
+const TREE_NODES: usize = 1 << 18;
+static TREE: Mutex<[Node; TREE_NODES]> = Mutex::new([Node::EMPTY; TREE_NODES]);
 
 /// Thinking time per move, by board size.
 fn budget(size: usize) -> u64 {
@@ -32,13 +38,17 @@ struct Thinking {
 }
 
 pub struct Bot {
-    search: FlatMc,
+    search: Mcts<'static>,
     thinking: Option<Thinking>,
 }
 
 impl Bot {
+    /// Creates the computer player. There can only be one, as it takes
+    /// over the static search tree for good.
     pub fn new(seed: u64) -> Self {
-        Bot { search: FlatMc::new(seed), thinking: None }
+        let tree = TREE.try_lock().expect("only one Bot may exist");
+        let nodes: &'static mut [Node; TREE_NODES] = MutexGuard::leak(tree);
+        Bot { search: Mcts::new(nodes, seed), thinking: None }
     }
 
     /// Drops any thinking in progress (after undo, new game...).
@@ -73,7 +83,7 @@ impl Bot {
 
         let slice_end = now + SLICE;
         while !self.search.decided() && ticks() < slice_end.min(deadline) {
-            self.search.step(4);
+            self.search.step(1);
         }
 
         if ticks() < deadline {
@@ -82,11 +92,12 @@ impl Bot {
         let started = self.thinking.take().map_or(now, |t| t.started);
         let (mv, rate) = self.search.best();
         serial_println!(
-            "computer: {mv:?}, win rate {}.{}% after {} playouts in {} ms",
+            "computer: {mv:?}, win rate {}.{}% after {} playouts in {} ms, {} tree nodes",
             rate / 10,
             rate % 10,
             self.search.playouts(),
-            (ticks() - started) * 1000 / TICK_HZ
+            (ticks() - started) * 1000 / TICK_HZ,
+            self.search.tree_size()
         );
         Some(mv)
     }

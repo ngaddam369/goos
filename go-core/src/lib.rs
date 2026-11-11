@@ -6,6 +6,7 @@
 mod board;
 mod game;
 mod mc;
+mod mcts;
 mod playout;
 mod rng;
 mod score;
@@ -14,6 +15,7 @@ mod zobrist;
 pub use board::{Board, Cell, Color, IllegalMove, MAX_SIZE, MoveInfo, Point, PointSet};
 pub use game::{Game, Move, Phase};
 pub use mc::FlatMc;
+pub use mcts::{Mcts, Node};
 pub use playout::{is_eye, playout, playout_area, playout_limit, playout_winner, random_bot, random_move, should_pass};
 pub use rng::Rng;
 pub use score::{Score, score};
