@@ -58,6 +58,8 @@ pub enum Action {
     Undo,
     NewGame,
     Escape,
+    /// Send the game record (SGF) over serial.
+    SaveGame,
 }
 
 pub fn action(key: DecodedKey) -> Option<Action> {
@@ -78,6 +80,7 @@ pub fn action(key: DecodedKey) -> Option<Action> {
             'p' => Action::Pass,
             'u' => Action::Undo,
             'n' => Action::NewGame,
+            'g' => Action::SaveGame,
             '\u{1b}' => Action::Escape,
             _ => return None,
         },

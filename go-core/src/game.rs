@@ -73,9 +73,10 @@ impl Game {
         }
     }
 
-    /// Starts a new game of the given size, in place.
+    /// Starts a new game of the given size, in place, with the default komi.
     pub fn reset(&mut self, size: usize) {
         self.set_position(Board::new(size), Color::Black);
+        self.komi_half = DEFAULT_KOMI_HALF;
     }
 
     /// Starts from an arbitrary position (handicap stones, tests).
@@ -110,6 +111,24 @@ impl Game {
     /// The last move and who made it.
     pub fn last_move(&self) -> Option<(Color, Move)> {
         self.last
+    }
+
+    /// The earliest position still remembered and who was to move there:
+    /// the starting position, unless a very long game overflowed the history.
+    pub fn start_position(&self) -> (Board, Color) {
+        match self.history[..self.history_len].first() {
+            Some(s) => (s.board, s.to_move),
+            None => (self.board, self.to_move),
+        }
+    }
+
+    /// The moves (and passes) played from `start_position`, in order.
+    pub fn moves(&self) -> impl Iterator<Item = (Color, Move)> + '_ {
+        // Each snapshot records the move that led to its position, so the
+        // moves made from the start are those of snapshots 1.. plus the
+        // move that led to the current position.
+        let current = (self.history_len > 0).then_some(self.last).flatten();
+        self.history[..self.history_len].iter().skip(1).filter_map(|s| s.last).chain(current)
     }
 
     /// Moves (including passes) made so far.
@@ -355,6 +374,20 @@ mod tests {
         assert_eq!(game.move_number(), 0);
         assert_eq!(game.last_move(), None);
         assert!(!game.undo(), "nothing left to undo");
+    }
+
+    #[test]
+    fn move_list_replays_the_game() {
+        let mut game = ko_game();
+        let start = *game.board();
+        game.play(p(2, 1)).unwrap();
+        game.pass().unwrap();
+        game.play(p(4, 4)).unwrap();
+        let moves: Vec<_> = game.moves().collect();
+        assert_eq!(moves, vec![(B, Move::Play(p(2, 1))), (W, Move::Pass), (B, Move::Play(p(4, 4)))]);
+        assert_eq!(game.start_position(), (start, B));
+        game.undo();
+        assert_eq!(game.moves().count(), 2);
     }
 
     #[test]

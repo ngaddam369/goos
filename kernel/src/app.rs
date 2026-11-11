@@ -7,7 +7,7 @@
 
 use core::fmt::Write;
 
-use go_core::{Cell, Color as Player, Game, MAX_SIZE, Move, Phase, Point, Score};
+use go_core::{Cell, Color as Player, Game, MAX_SIZE, Move, Phase, Point, Score, SgfError, read_sgf, write_sgf};
 use spin::{Mutex, MutexGuard};
 
 use crate::bot::{self, Bot};
@@ -17,6 +17,7 @@ use crate::input::Action;
 use crate::mouse::MouseEvent;
 use crate::pointer::Pointer;
 use crate::interrupts::TICK_HZ;
+use crate::serial::SerialOut;
 use crate::serial_println;
 use crate::sound::{Effect, Sound};
 use crate::ui::{self, Layout, PointView};
@@ -50,10 +51,102 @@ enum Mode {
     Game,
 }
 
-/// A short-lived warning in the status panel (illegal move etc.).
+/// A short-lived message in the status panel (illegal move etc.).
 struct Notice {
     text: Line,
+    color: Color,
     until: u64,
+}
+
+/// Marker lines around a game record sent over serial; the runner looks
+/// for them to save the record to a file.
+const SGF_BEGIN: &str = "-----BEGIN SGF-----";
+const SGF_END: &str = "-----END SGF-----";
+
+/// Longest game record accepted over serial.
+const SGF_MAX: usize = 32 * 1024;
+
+/// Collects bytes arriving on serial until they form one complete SGF game
+/// tree: from a `(` to its matching `)`, ignoring brackets inside property
+/// values (which may contain escaped `]`).
+struct SgfReceiver {
+    buf: [u8; SGF_MAX],
+    len: usize,
+    /// Inside a record (`len` counts its bytes unless `discarding`).
+    active: bool,
+    /// The record was too long: skip the rest of it rather than storing it.
+    discarding: bool,
+    depth: u32,
+    in_value: bool,
+    escaped: bool,
+}
+
+enum Received {
+    Nothing,
+    /// A complete tree of this many bytes is in `buf`.
+    Complete(usize),
+    TooLong,
+}
+
+impl SgfReceiver {
+    const fn new() -> Self {
+        SgfReceiver { buf: [0; SGF_MAX], len: 0, active: false, discarding: false, depth: 0, in_value: false, escaped: false }
+    }
+
+    fn reset(&mut self) {
+        self.len = 0;
+        self.active = false;
+        self.discarding = false;
+        self.depth = 0;
+        self.in_value = false;
+        self.escaped = false;
+    }
+
+    fn feed(&mut self, byte: u8) -> Received {
+        if !self.active {
+            if byte != b'(' {
+                return Received::Nothing; // noise between records
+            }
+            self.active = true;
+        }
+        let mut result = Received::Nothing;
+        if !self.discarding {
+            if self.len == SGF_MAX {
+                // Keep following the structure to find the record's end, so
+                // nothing inside it is mistaken for the start of another.
+                self.discarding = true;
+                result = Received::TooLong;
+            } else {
+                self.buf[self.len] = byte;
+                self.len += 1;
+            }
+        }
+        if self.in_value {
+            match byte {
+                _ if self.escaped => self.escaped = false,
+                b'\\' => self.escaped = true,
+                b']' => self.in_value = false,
+                _ => {}
+            }
+        } else {
+            match byte {
+                b'[' => self.in_value = true,
+                b'(' => self.depth += 1,
+                b')' => {
+                    self.depth -= 1;
+                    if self.depth == 0 {
+                        let (len, complete) = (self.len, !self.discarding);
+                        self.reset();
+                        if complete {
+                            return Received::Complete(len);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        result
+    }
 }
 
 pub struct App {
@@ -101,6 +194,7 @@ pub struct App {
     pointer: Pointer,
     /// The pointer moved since it was last drawn.
     pointer_moved: bool,
+    sgf_in: SgfReceiver,
 }
 
 impl App {
@@ -133,6 +227,7 @@ impl App {
             hovered: None,
             pointer: Pointer::new(),
             pointer_moved: false,
+            sgf_in: SgfReceiver::new(),
         }
     }
 
@@ -232,6 +327,11 @@ impl App {
                 let mut result = Line::new();
                 write_result(&mut result, &score, true);
                 serial_println!("game over: {}", result.as_str());
+                self.save_game();
+            }
+            Action::SaveGame => {
+                self.save_game();
+                self.set_notice("Game record sent to serial", ui::ACCENT, now);
             }
             Action::Pass if phase == Phase::Playing => self.pass(),
             Action::Undo => {
@@ -298,9 +398,77 @@ impl App {
     }
 
     fn set_timed_notice(&mut self, message: &str, now: u64) {
+        self.set_notice(message, ui::WARNING, now);
+    }
+
+    fn set_notice(&mut self, message: &str, color: Color, now: u64) {
         let mut text = Line::new();
         let _ = text.write_str(message);
-        self.notice = Some(Notice { text, until: now + NOTICE_TICKS });
+        // Warnings are brief; other news stays up a little longer.
+        let duration = if color == ui::WARNING { NOTICE_TICKS } else { 2 * NOTICE_TICKS };
+        self.notice = Some(Notice { text, color, until: now + duration });
+    }
+
+    /// Sends the game record (SGF) over serial between marker lines.
+    fn save_game(&mut self) {
+        serial_println!("{SGF_BEGIN}");
+        let _ = write_sgf(&self.game, &mut SerialOut);
+        serial_println!("{SGF_END}");
+    }
+
+    /// Feeds a byte received on serial to the SGF receiver, and loads the
+    /// game once a complete record has arrived.
+    pub fn handle_serial(&mut self, byte: u8, now: u64) {
+        match self.sgf_in.feed(byte) {
+            Received::Nothing => {}
+            Received::TooLong => {
+                serial_println!("SGF: record too long (over {SGF_MAX} bytes)");
+                self.set_timed_notice("Game record too long", now);
+                self.dirty = true;
+            }
+            Received::Complete(len) => self.load_game(len, now),
+        }
+    }
+
+    fn load_game(&mut self, len: usize, now: u64) {
+        let result = read_sgf(&self.sgf_in.buf[..len], &mut self.game);
+        let loaded = match result {
+            Ok(()) => true,
+            // Loaded up to the bad move: show what we have.
+            Err(SgfError::Illegal(..) | SgfError::OutOfTurn(_)) => true,
+            Err(_) => false,
+        };
+        match result {
+            Ok(()) => serial_println!("SGF: loaded {}x{} game, {} moves", self.game.size(), self.game.size(), self.game.move_number()),
+            Err(SgfError::Illegal(n, e)) => serial_println!("SGF: move {n} is illegal ({}); loaded the moves before it", e.message()),
+            Err(SgfError::OutOfTurn(n)) => serial_println!("SGF: move {n} is out of turn; loaded the moves before it"),
+            Err(e) => serial_println!("SGF: not loaded: {}", e.message()),
+        }
+        if loaded {
+            // Loaded games are played between two humans.
+            let size = self.game.size();
+            self.layout = Layout::new(self.screen.width(), self.screen.height(), size);
+            self.hovered = None;
+            self.cursor = Point::new(size / 2, size / 2);
+            self.clocks = [0; 2];
+            self.opponent = Opponent::Human;
+            self.bot.cancel();
+            self.mode = Mode::Game;
+            self.has_game = true;
+            self.repaint = true;
+        }
+        let mut text = Line::new();
+        match result {
+            Ok(()) => {
+                let _ = write!(text, "Game loaded: {} moves", self.game.move_number());
+                self.set_notice(text.as_str(), ui::ACCENT, now);
+            }
+            Err(e) => {
+                let _ = write!(text, "Game record: {}", e.message());
+                self.set_timed_notice(text.as_str(), now);
+            }
+        }
+        self.dirty = true;
     }
 
     fn move_cursor(&mut self, dx: isize, dy: isize) {
@@ -483,7 +651,7 @@ impl App {
         write_clock(&mut white, self.clocks[1]);
         put(6, ui::DIM_TEXT, format_args!("Time  B {}  W {}", black.as_str(), white.as_str()));
         if let Some(n) = &self.notice {
-            put(7, ui::WARNING, format_args!("{}", n.text.as_str()));
+            put(7, n.color, format_args!("{}", n.text.as_str()));
         } else if let (Phase::Playing, true, Some((who, Move::Pass))) =
             (game.phase(), game.passes() > 0, game.last_move())
         {
@@ -498,9 +666,9 @@ impl App {
         }
 
         let help: &[&str] = match game.phase() {
-            Phase::Playing => &["Arrows/WASD  move", "Space/Enter  place", "P pass   U undo", "N  new game"],
+            Phase::Playing => &["Arrows/WASD  move", "Space/Enter  place", "P pass   U undo", "N new game  G save"],
             Phase::Scoring => &["Space  mark dead group", "Enter  confirm score", "Esc  resume play", "U undo   N new game"],
-            Phase::Finished => &["U  back to scoring", "N  new game"],
+            Phase::Finished => &["U  back to scoring", "N new game  G save"],
         };
         // Help goes at the bottom of the panel, below the score lines; it's
         // left out if the panel is too short.

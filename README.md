@@ -49,6 +49,7 @@ found, point `GOOS_OVMF` at your `OVMF.fd`.
 ```sh
 cargo run --release            # build the disk image and boot it (BIOS)
 cargo run --release -- uefi    # boot the UEFI image instead
+cargo run --release -- load game.sgf   # boot and load a saved game
 cargo run --release -- images  # print where the disk images are
 cargo test -p go-core          # run the rules tests on the host
 ```
@@ -78,6 +79,7 @@ Environment variables for the runner:
 | Space / Enter / left click | place a stone |
 | P | pass |
 | U | undo |
+| G | save the game record (SGF) over serial |
 | N | back to the start screen (Esc returns to the current game) |
 
 After both players pass in a row, the game enters **scoring mode**:
@@ -109,6 +111,30 @@ simply runs silently.
 **Mouse:** a PS/2 mouse works too. In the QEMU window, click once to let
 QEMU capture the mouse (it is a relative PS/2 mouse, so QEMU has to grab
 it) and press Ctrl+Alt+G to release it again.
+
+## Saving and loading games (SGF)
+
+Games are saved and loaded as [SGF](https://www.red-bean.com/sgf/) text
+over the serial port.
+
+- **Save:** press G during a game (it also happens automatically when you
+  confirm the final score). The kernel prints the record between
+  `-----BEGIN SGF-----` and `-----END SGF-----` lines, and the runner
+  saves it to `goos-<time>.sgf` in the current directory.
+- **Load:** `cargo run --release -- load game.sgf` sends the file once the
+  kernel has booted. When started without `load`, you can also paste an
+  SGF record into the terminal while GoOS runs. As soon as a complete
+  `( ... )` record has arrived, it replaces the current game (as a game
+  between two humans); if several arrive, the last one wins.
+
+Records from other programs work as long as they are for a square board of
+up to 19×19 (`SZ[19]` or `SZ[19:19]`): the main line is loaded,
+variations, comments and other properties are skipped, and setup stones
+(handicap), komi and the player to move are kept. The record is checked
+before the current game is touched; then every move goes through the
+normal rules, and if one is illegal (or two moves in a row are by the same
+colour, which GoOS doesn't support) the game is loaded up to that move and
+the panel says so.
 
 ## Playing the computer
 
@@ -188,6 +214,14 @@ redraws. Moves and the computer's estimated win rate are logged to serial.
   Zobrist keys generated at compile time by a `const fn` splitmix64, and the
   game keeps 1024 snapshots for undo and superko. Scoring removes the marked
   dead stones and flood-fills empty regions to find their owners.
+- **Serial input** (`serial.rs`). COM1's "byte received" interrupt
+  (IRQ4) is enabled and its handler queues incoming bytes. The app
+  collects them until a complete SGF game tree has arrived (matching
+  parentheses, ignoring any inside property values), then hands it to the
+  SGF reader in `go-core` (`sgf.rs`), which checks the record's syntax,
+  size and coordinates before replacing the game. If the receive queue
+  fills up, reception pauses (the bytes wait in the UART) until there is
+  room again.
 - **Sound** (`sound.rs`). Tones are played on the PC speaker through PIT
   channel 2 and switched off by the main loop when their time is up, so
   nothing blocks.

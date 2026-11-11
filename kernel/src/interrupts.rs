@@ -11,7 +11,7 @@ use x86_64::instructions::port::Port;
 use x86_64::registers::control::Cr2;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 
-use crate::{gdt, input, mouse, pit, ps2, serial_println};
+use crate::{gdt, input, mouse, pit, ps2, serial, serial_println};
 
 /// Timer interrupts per second.
 pub const TICK_HZ: u64 = 1000;
@@ -27,6 +27,8 @@ static PICS: Mutex<ChainedPics> = Mutex::new(unsafe { ChainedPics::new(PIC_1_OFF
 enum Irq {
     Timer = PIC_1_OFFSET,
     Keyboard,
+    /// IRQ4: COM1 received a byte.
+    Serial = PIC_1_OFFSET + 4,
     /// IRQ12, on the second PIC.
     Mouse = PIC_2_OFFSET + 4,
 }
@@ -53,34 +55,43 @@ static IDT: LazyLock<InterruptDescriptorTable> = LazyLock::new(|| {
     idt[Irq::Timer as u8].set_handler_fn(timer_handler);
     idt[Irq::Keyboard as u8].set_handler_fn(keyboard_handler);
     idt[Irq::Mouse as u8].set_handler_fn(mouse_handler);
+    idt[Irq::Serial as u8].set_handler_fn(serial_handler);
     idt[PIC_1_OFFSET + 7].set_handler_fn(spurious_master_handler);
     idt[PIC_2_OFFSET + 7].set_handler_fn(spurious_slave_handler);
     idt
 });
 
-/// Sets up the GDT, IDT, PIC, PIT and the PS/2 mouse, then enables
-/// interrupts. Returns whether a mouse was found.
+/// Sets up the GDT, IDT, PIC, PIT, the PS/2 mouse and serial input, then
+/// enables interrupts. Returns whether a mouse was found.
 pub fn init() -> bool {
     gdt::init();
     IDT.load();
     pit::set_timer_hz(TICK_HZ as u32);
     let mouse = ps2::init_mouse();
+    let serial_input = serial::enable_receive_interrupt();
     // SAFETY: the PICs are remapped away from the CPU exception vectors.
     unsafe {
         let mut pics = PICS.lock();
         pics.initialize();
         // Firmware may leave every line masked; enable only the timer
-        // (IRQ0), the keyboard (IRQ1) and, with a mouse, IRQ12 plus the
-        // cascade line (IRQ2) it reaches the first PIC through.
-        if mouse {
-            pics.write_masks(0b1111_1000, 0b1110_1111);
-        } else {
-            pics.write_masks(0b1111_1100, 0b1111_1111);
+        // (IRQ0), the keyboard (IRQ1), serial input (IRQ4) and, with a
+        // mouse, IRQ12 plus the cascade line (IRQ2) it reaches the first
+        // PIC through. A set bit masks the line.
+        let mut first: u8 = 0b1111_1100;
+        let mut second: u8 = 0b1111_1111;
+        if serial_input {
+            first &= !(1 << 4);
         }
+        if mouse {
+            first &= !(1 << 2);
+            second &= !(1 << 4);
+        }
+        pics.write_masks(first, second);
     }
-    // A byte that arrived before the PICs were set up lost its interrupt;
-    // collect it now, or the 8042 would wait forever for it to be read.
+    // Bytes that arrived before the PICs were set up lost their interrupt;
+    // collect them now, or the devices would wait forever to be read.
     take_ps2_byte();
+    serial::take_received();
     x86_64::instructions::interrupts::enable();
     mouse
 }
@@ -143,6 +154,11 @@ fn take_ps2_byte() {
 extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
     take_ps2_byte();
     end_of_interrupt(Irq::Keyboard);
+}
+
+extern "x86-interrupt" fn serial_handler(_frame: InterruptStackFrame) {
+    serial::take_received();
+    end_of_interrupt(Irq::Serial);
 }
 
 extern "x86-interrupt" fn mouse_handler(_frame: InterruptStackFrame) {

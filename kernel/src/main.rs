@@ -44,6 +44,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let mut keyboard = input::Keyboard::new();
     let mut mouse = mouse::Mouse::new();
     let mut app = app::App::new(screen);
+    // The runner waits for this before sending a game record to load.
+    serial_println!("GoOS ready");
     loop {
         let now = ticks();
         while let Some(key) = keyboard.next_key() {
@@ -53,6 +55,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
         while let Some(event) = mouse.next_event() {
             app.handle_mouse(event, now);
+        }
+        serial::poll();
+        while let Some(byte) = serial::receive() {
+            app.handle_serial(byte, now);
         }
         app.update(now);
         if !app.busy() {
@@ -65,7 +71,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 fn idle() {
     use x86_64::instructions::interrupts;
     interrupts::disable();
-    if input::is_empty() && mouse::is_empty() {
+    if input::is_empty() && mouse::is_empty() && !serial::has_input() {
         // `sti; hlt` back to back: an interrupt can't slip in between.
         interrupts::enable_and_hlt();
     } else {

@@ -38,6 +38,10 @@ impl<const N: usize> ByteQueue<N> {
         Some(byte)
     }
 
+    pub fn is_full(&self) -> bool {
+        (self.tail.load(Ordering::Relaxed) + 1) % N == self.head.load(Ordering::Acquire)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.head.load(Ordering::Relaxed) == self.tail.load(Ordering::Acquire)
     }
