@@ -116,6 +116,11 @@ impl Game {
         self.board.captures(color)
     }
 
+    /// Consecutive passes so far (reset by a move or by resuming play).
+    pub fn passes(&self) -> u8 {
+        self.passes
+    }
+
     pub fn komi_half(&self) -> u16 {
         self.komi_half
     }

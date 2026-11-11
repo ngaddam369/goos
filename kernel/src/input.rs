@@ -3,7 +3,7 @@
 
 use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
-use pc_keyboard::{DecodedKey, HandleControl, PS2Keyboard, ScancodeSet1, layouts::Us104Key};
+use pc_keyboard::{DecodedKey, HandleControl, KeyCode, PS2Keyboard, ScancodeSet1, layouts::Us104Key};
 
 const QUEUE_LEN: usize = 128;
 
@@ -63,4 +63,46 @@ impl Keyboard {
         }
         None
     }
+}
+
+/// What a key press means to the game.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    Up,
+    Down,
+    Left,
+    Right,
+    /// Space: place a stone, or toggle a dead group while scoring.
+    Place,
+    /// Enter: place a stone, or confirm the score.
+    Confirm,
+    Pass,
+    Undo,
+    NewGame,
+    Escape,
+}
+
+pub fn action(key: DecodedKey) -> Option<Action> {
+    Some(match key {
+        DecodedKey::RawKey(KeyCode::ArrowUp) => Action::Up,
+        DecodedKey::RawKey(KeyCode::ArrowDown) => Action::Down,
+        DecodedKey::RawKey(KeyCode::ArrowLeft) => Action::Left,
+        DecodedKey::RawKey(KeyCode::ArrowRight) => Action::Right,
+        DecodedKey::RawKey(KeyCode::Escape) => Action::Escape,
+        DecodedKey::RawKey(KeyCode::NumpadEnter) => Action::Confirm,
+        DecodedKey::Unicode(c) => match c.to_ascii_lowercase() {
+            'w' => Action::Up,
+            's' => Action::Down,
+            'a' => Action::Left,
+            'd' => Action::Right,
+            ' ' => Action::Place,
+            '\n' | '\r' => Action::Confirm,
+            'p' => Action::Pass,
+            'u' => Action::Undo,
+            'n' => Action::NewGame,
+            '\u{1b}' => Action::Escape,
+            _ => return None,
+        },
+        DecodedKey::RawKey(_) => return None,
+    })
 }

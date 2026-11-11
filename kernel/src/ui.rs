@@ -7,10 +7,11 @@
 //! Points and status lines are composed off-screen and copied over in one
 //! go, so redraws don't flicker.
 
+use go_core::Color as Player;
 use noto_sans_mono_bitmap::{FontWeight, RasterHeight};
 
 use crate::font::{self, Font};
-use crate::framebuffer::{Canvas, Color, Screen, TILE, disc_coverage};
+use crate::framebuffer::{Canvas, Color, Screen, TILE, TILE_PIXELS, disc_coverage};
 
 pub const BACKGROUND: Color = Color::rgb(0x24, 0x28, 0x2E);
 pub const WOOD: Color = Color::rgb(0xDC, 0xB3, 0x5C);
@@ -22,20 +23,26 @@ const BLACK_EDGE: Color = Color::rgb(0x00, 0x00, 0x00);
 const BLACK_SHINE: Color = Color::rgb(0x6A, 0x6A, 0x70);
 const WHITE_STONE: Color = Color::rgb(0xF4, 0xF2, 0xEC);
 const WHITE_EDGE: Color = Color::rgb(0x70, 0x70, 0x70);
+const CURSOR: Color = Color::rgb(0x1E, 0x5A, 0xC8);
+const LAST_MOVE: Color = Color::rgb(0xD0, 0x30, 0x30);
+pub const WARNING: Color = Color::rgb(0xF0, 0x80, 0x70);
+pub const ACCENT: Color = Color::rgb(0xF0, 0xC8, 0x60);
 
 /// Column labels: Go coordinates skip the letter I.
 const COLUMNS: &[u8; 19] = b"ABCDEFGHJKLMNOPQRST";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Stone {
-    Black,
-    White,
-}
-
 /// Everything drawn at one intersection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PointView {
-    pub stone: Option<Stone>,
+    pub stone: Option<Player>,
+    /// Marked dead during scoring (drawn faded).
+    pub dead: bool,
+    /// Counted as this player's territory (drawn as a small square).
+    pub territory: Option<Player>,
+    pub last_move: bool,
+    pub cursor: bool,
+    /// Translucent preview of the stone the cursor would place.
+    pub ghost: Option<Player>,
 }
 
 pub struct Layout {
@@ -80,7 +87,10 @@ impl Layout {
         let board_x = margin;
         let board_y = screen_h.saturating_sub(board_px) / 2;
         let panel_x = board_x + board_px + 2 * margin;
-        let big = screen_h >= 1000;
+        let panel_w = screen_w.saturating_sub(panel_x + margin);
+        // A bigger font on big screens, if the panel fits ~26 characters.
+        let big_font = Font::new(RasterHeight::Size32, FontWeight::Regular);
+        let big = screen_h >= 1000 && panel_w >= 26 * big_font.char_width();
         Layout {
             size,
             cell,
@@ -95,9 +105,9 @@ impl Layout {
             line: if cell >= 80 { 3 } else { 1 },
             panel_x,
             panel_y: board_y,
-            panel_w: screen_w.saturating_sub(panel_x + margin),
+            panel_w,
             label_font,
-            text_font: Font::new(if big { RasterHeight::Size32 } else { RasterHeight::Size24 }, FontWeight::Regular),
+            text_font: if big { big_font } else { Font::new(RasterHeight::Size24, FontWeight::Regular) },
             title_font: Font::new(RasterHeight::Size32, FontWeight::Bold),
         }
     }
@@ -109,6 +119,15 @@ impl Layout {
 
     fn stone_radius(&self) -> isize {
         (self.cell * 47 / 100) as isize
+    }
+
+    fn panel_line_height(&self) -> usize {
+        self.text_font.line_height() * 3 / 2
+    }
+
+    /// How many text lines fit in the status panel.
+    pub fn panel_lines(&self) -> usize {
+        self.board_px / self.panel_line_height()
     }
 }
 
@@ -185,23 +204,56 @@ pub fn draw_point(screen: &mut Screen, layout: &Layout, col: usize, row: usize, 
     tile.vline(half - v_width / 2, v_start, v_end - v_start, v_width, LINE);
 
     let c = half as isize;
+    let r = layout.stone_radius();
     if is_hoshi(layout.size, col, row) {
         tile.fill_circle(c, c, (cell / 10).max(2) as isize, LINE);
     }
     if let Some(stone) = view.stone {
-        draw_stone(&mut *tile, c, c, layout.stone_radius(), stone, 255);
+        draw_stone(&mut *tile, c, c, r, stone, if view.dead { 100 } else { 255 });
+    } else if let Some(ghost) = view.ghost {
+        draw_stone(&mut *tile, c, c, r, ghost, 90);
+    }
+    if let Some(owner) = view.territory {
+        let side = (cell / 4).max(3);
+        let (fill, edge) = match owner {
+            Player::Black => (BLACK_STONE, BLACK_EDGE),
+            Player::White => (WHITE_STONE, WHITE_EDGE),
+        };
+        tile.fill_rect(half - side / 2, half - side / 2, side, side, edge);
+        tile.fill_rect(half - side / 2 + 1, half - side / 2 + 1, side - 2, side - 2, fill);
+    }
+    if view.last_move {
+        tile.fill_circle(c, c, (r / 3).max(2), LAST_MOVE);
+    }
+    if view.cursor {
+        draw_cursor(&mut *tile, cell);
     }
 
     screen.blit(x - half, y - half, &tile);
 }
 
+/// Corner brackets around the cell, inset a little from its edges.
+fn draw_cursor(canvas: &mut impl Canvas, cell: usize) {
+    let inset = (cell / 12).max(1);
+    let len = cell / 4;
+    let t = (cell / 20).clamp(2, 4);
+    let (lo, hi) = (inset, cell - inset - t);
+    for (x, y) in [(lo, lo), (hi, lo), (lo, hi), (hi, hi)] {
+        // Each corner: one horizontal and one vertical arm pointing inwards.
+        let hx = if x == lo { x } else { x + t - len };
+        let vy = if y == lo { y } else { y + t - len };
+        canvas.hline(hx, y, len, t, CURSOR);
+        canvas.vline(x, vy, len, t, CURSOR);
+    }
+}
+
 /// Draws a stone in a single pass, so a translucent (dead) stone blends
 /// cleanly with what's underneath.
-fn draw_stone(canvas: &mut impl Canvas, cx: isize, cy: isize, r: isize, stone: Stone, alpha: u8) {
+fn draw_stone(canvas: &mut impl Canvas, cx: isize, cy: isize, r: isize, stone: Player, alpha: u8) {
     let rim_width = (r / 14).max(1);
     let (rim, body) = match stone {
-        Stone::Black => (BLACK_EDGE, BLACK_STONE),
-        Stone::White => (WHITE_EDGE, WHITE_STONE),
+        Player::Black => (BLACK_EDGE, BLACK_STONE),
+        Player::White => (WHITE_EDGE, WHITE_STONE),
     };
     // Black stones get a soft highlight towards the top left.
     let (shine_x, shine_y, shine_r) = (-r / 3, -r / 3, r / 4);
@@ -214,7 +266,7 @@ fn draw_stone(canvas: &mut impl Canvas, cx: isize, cy: isize, r: isize, stone: S
                 continue;
             }
             let mut color = body.blend_over(rim, disc_coverage(d2, r - rim_width));
-            if stone == Stone::Black {
+            if stone == Player::Black {
                 let s2 = (dx - shine_x) * (dx - shine_x) + (dy - shine_y) * (dy - shine_y);
                 color = BLACK_SHINE.blend_over(color, disc_coverage(s2, shine_r) / 3);
             }
@@ -227,9 +279,20 @@ fn draw_stone(canvas: &mut impl Canvas, cx: isize, cy: isize, r: isize, stone: S
 /// Redraws one line of text in the status panel, replacing what was there.
 /// Text is clipped to the panel.
 pub fn panel_line(screen: &mut Screen, layout: &Layout, line: usize, text: &str, font: Font, color: Color) {
-    let line_h = layout.text_font.line_height() * 3 / 2;
+    let line_h = layout.panel_line_height();
     let mut tile = TILE.lock();
     tile.reset(layout.panel_w, line_h, BACKGROUND);
     font::draw_text(&mut *tile, 0, 0, text, font, color);
     screen.blit(layout.panel_x, layout.panel_y + line * line_h, &tile);
+}
+
+/// Draws one line of text centred horizontally on the screen, replacing a
+/// band of background `line_h` pixels tall at `y`.
+pub fn centered_line(screen: &mut Screen, y: usize, line_h: usize, text: &str, font: Font, color: Color) {
+    let width = screen.width().min(1600).min(TILE_PIXELS / line_h.max(1));
+    let mut tile = TILE.lock();
+    tile.reset(width, line_h, BACKGROUND);
+    let x = width.saturating_sub(font.text_width(text)) / 2;
+    font::draw_text(&mut *tile, x, line_h.saturating_sub(font.line_height()) / 2, text, font, color);
+    screen.blit((screen.width() - width) / 2, y, &tile);
 }

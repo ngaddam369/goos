@@ -251,7 +251,7 @@ impl Canvas for Screen {
 }
 
 /// Room for a 9x9 board cell at 2560x1600, or a full-width status line.
-const TILE_PIXELS: usize = 96_000;
+pub const TILE_PIXELS: usize = 96_000;
 
 /// An off-screen drawing area in ordinary memory (fast to read back, unlike
 /// video memory).

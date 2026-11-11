@@ -1,0 +1,393 @@
+//! The game controller: turns key actions into moves on the `go-core` game
+//! and keeps the screen in sync with it.
+//!
+//! Rendering is driven by state, not by events: after anything changes, the
+//! view of every intersection and every status line is recomputed and only
+//! those that differ from what is on screen get redrawn.
+
+use core::fmt::Write;
+
+use go_core::{Cell, Color as Player, Game, MAX_SIZE, Move, Phase, Point, Score};
+use spin::{Mutex, MutexGuard};
+
+use crate::font::{Font, TextBuf};
+use crate::framebuffer::{Canvas, Color, Screen};
+use crate::input::Action;
+use crate::interrupts::TICK_HZ;
+use crate::serial_println;
+use crate::ui::{self, Layout, PointView};
+
+/// The game lives in a static, built at compile time: with its undo
+/// history it's bigger than the kernel stack.
+static GAME: Mutex<Game> = Mutex::new(Game::new(19));
+
+const SIZES: [usize; 3] = [9, 13, 19];
+/// How long an illegal-move message stays up.
+const NOTICE_TICKS: u64 = TICK_HZ * 3 / 2;
+const MAX_PANEL_LINES: usize = 24;
+const COLUMNS: &[u8; 19] = b"ABCDEFGHJKLMNOPQRST";
+
+type Line = TextBuf<40>;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Choosing the board size.
+    Start,
+    Game,
+}
+
+/// A short-lived warning in the status panel (illegal move etc.).
+struct Notice {
+    text: Line,
+    until: u64,
+}
+
+pub struct App {
+    screen: Screen,
+    game: MutexGuard<'static, Game>,
+    mode: Mode,
+    /// Index into `SIZES` of the size picked on the start screen.
+    size_choice: usize,
+    /// A game has been started (so Esc on the start screen returns to it).
+    has_game: bool,
+    layout: Layout,
+    cursor: Point,
+    notice: Option<Notice>,
+    /// What each intersection currently shows on screen (`None`: unknown,
+    /// must be drawn).
+    drawn: [Option<PointView>; MAX_SIZE * MAX_SIZE],
+    /// What each status panel line currently shows.
+    panel: [Option<(Line, Color)>; MAX_PANEL_LINES],
+    /// Something changed since the last render.
+    dirty: bool,
+    /// The whole screen must be repainted (new game or mode switch).
+    repaint: bool,
+}
+
+impl App {
+    pub fn new(screen: Screen) -> Self {
+        let layout = Layout::new(screen.width(), screen.height(), 19);
+        App {
+            screen,
+            game: GAME.lock(),
+            mode: Mode::Start,
+            size_choice: 2,
+            has_game: false,
+            layout,
+            cursor: Point::new(9, 9),
+            notice: None,
+            drawn: [None; MAX_SIZE * MAX_SIZE],
+            panel: [const { None }; MAX_PANEL_LINES],
+            dirty: true,
+            repaint: true,
+        }
+    }
+
+    pub fn handle(&mut self, action: Action, now: u64) {
+        self.dirty = true;
+        match self.mode {
+            Mode::Start => self.handle_start(action),
+            Mode::Game => self.handle_game(action, now),
+        }
+    }
+
+    fn handle_start(&mut self, action: Action) {
+        match action {
+            Action::Left | Action::Up => self.size_choice = (self.size_choice + SIZES.len() - 1) % SIZES.len(),
+            Action::Right | Action::Down | Action::NewGame => self.size_choice = (self.size_choice + 1) % SIZES.len(),
+            Action::Place | Action::Confirm => self.start_game(),
+            Action::Escape if self.has_game => {
+                self.mode = Mode::Game;
+                self.repaint = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn start_game(&mut self) {
+        let size = SIZES[self.size_choice];
+        self.game.reset(size);
+        self.layout = Layout::new(self.screen.width(), self.screen.height(), size);
+        self.cursor = Point::new(size / 2, size / 2);
+        self.notice = None;
+        self.mode = Mode::Game;
+        self.has_game = true;
+        self.repaint = true;
+        serial_println!("new game {size}x{size}");
+    }
+
+    fn handle_game(&mut self, action: Action, now: u64) {
+        let phase = self.game.phase();
+        match action {
+            Action::Up => self.move_cursor(0, -1),
+            Action::Down => self.move_cursor(0, 1),
+            Action::Left => self.move_cursor(-1, 0),
+            Action::Right => self.move_cursor(1, 0),
+            Action::Place | Action::Confirm if phase == Phase::Playing => self.play(now),
+            Action::Place if phase == Phase::Scoring => {
+                self.game.toggle_dead(self.cursor);
+            }
+            Action::Confirm if phase == Phase::Scoring => {
+                self.game.finish();
+                let score = self.game.score();
+                let mut result = Line::new();
+                write_result(&mut result, &score, true);
+                serial_println!("game over: {}", result.as_str());
+            }
+            Action::Pass if phase == Phase::Playing => {
+                serial_println!("{} passes", name(self.game.to_move()));
+                let _ = self.game.pass();
+                self.notice = None;
+            }
+            Action::Undo => {
+                if self.game.undo() {
+                    serial_println!("undo");
+                    self.notice = None;
+                } else {
+                    self.set_timed_notice("Nothing to undo", now);
+                }
+            }
+            Action::Escape if phase == Phase::Scoring => {
+                self.game.resume();
+                self.notice = None;
+            }
+            Action::NewGame => {
+                self.mode = Mode::Start;
+                self.repaint = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn play(&mut self, now: u64) {
+        let player = self.game.to_move();
+        let p = self.cursor;
+        match self.game.play(p) {
+            Ok(info) => {
+                let coord = coordinate(p, self.game.size());
+                serial_println!("{} {} (captured {})", name(player), coord.as_str(), info.captured);
+                self.notice = None;
+            }
+            Err(e) => {
+                serial_println!("illegal: {}", e.message());
+                self.set_timed_notice(e.message(), now);
+            }
+        }
+    }
+
+    fn set_timed_notice(&mut self, message: &str, now: u64) {
+        let mut text = Line::new();
+        let _ = text.write_str(message);
+        self.notice = Some(Notice { text, until: now + NOTICE_TICKS });
+    }
+
+    fn move_cursor(&mut self, dx: isize, dy: isize) {
+        let max = self.game.size() as isize - 1;
+        let col = (self.cursor.col as isize + dx).clamp(0, max);
+        let row = (self.cursor.row as isize + dy).clamp(0, max);
+        self.cursor = Point::new(col as usize, row as usize);
+    }
+
+    /// Expires timed messages and redraws whatever changed.
+    pub fn update(&mut self, now: u64) {
+        if let Some(Notice { until, .. }) = self.notice
+            && now >= until
+        {
+            self.notice = None;
+            self.dirty = true;
+        }
+        if self.dirty {
+            self.dirty = false;
+            match self.mode {
+                Mode::Start => self.render_start(),
+                Mode::Game => self.render_game(),
+            }
+        }
+    }
+
+    fn render_start(&mut self) {
+        let screen = &mut self.screen;
+        if self.repaint {
+            self.repaint = false;
+            screen.clear(ui::BACKGROUND);
+            // The board will need a full repaint after this screen.
+            self.drawn = [None; MAX_SIZE * MAX_SIZE];
+            self.panel = [const { None }; MAX_PANEL_LINES];
+        }
+        let title = self.layout.title_font;
+        let text = self.layout.text_font;
+        let line_h = text.line_height() * 2;
+        let top = screen.height() / 3;
+        ui::centered_line(screen, top, line_h, "GoOS", title, ui::TEXT);
+        ui::centered_line(screen, top + line_h, line_h, "Go on bare metal", text, ui::DIM_TEXT);
+        ui::centered_line(screen, top + 3 * line_h, line_h, "Board size", text, ui::TEXT);
+        let size = SIZES[self.size_choice];
+        let mut choice = Line::new();
+        let _ = write!(choice, "<  {size} x {size}  >");
+        ui::centered_line(screen, top + 4 * line_h, line_h, choice.as_str(), title, ui::ACCENT);
+        let help = if self.has_game {
+            "Left/Right or N: change size    Enter: start    Esc: back"
+        } else {
+            "Left/Right or N: change size    Enter: start"
+        };
+        ui::centered_line(screen, top + 6 * line_h, line_h, help, text, ui::DIM_TEXT);
+    }
+
+    fn render_game(&mut self) {
+        let size = self.game.size();
+        let score = match self.game.phase() {
+            Phase::Playing => None,
+            Phase::Scoring | Phase::Finished => Some(self.game.score()),
+        };
+
+        if self.repaint {
+            self.repaint = false;
+            let (game, cursor) = (&*self.game, self.cursor);
+            ui::draw_board(&mut self.screen, &self.layout, |col, row| {
+                point_view(game, cursor, score.as_ref(), Point::new(col, row))
+            });
+            for p in (0..size * size).map(|i| Point::new(i % size, i / size)) {
+                self.drawn[index(p)] = Some(point_view(game, cursor, score.as_ref(), p));
+            }
+            self.panel = [const { None }; MAX_PANEL_LINES];
+        } else {
+            for p in (0..size * size).map(|i| Point::new(i % size, i / size)) {
+                let view = point_view(&self.game, self.cursor, score.as_ref(), p);
+                if self.drawn[index(p)] != Some(view) {
+                    ui::draw_point(&mut self.screen, &self.layout, p.col as usize, p.row as usize, view);
+                    self.drawn[index(p)] = Some(view);
+                }
+            }
+        }
+
+        self.render_panel(score.as_ref());
+    }
+
+    fn render_panel(&mut self, score: Option<&Score>) {
+        let mut lines: [Option<(Line, Color)>; MAX_PANEL_LINES] = [const { None }; MAX_PANEL_LINES];
+        let mut put = |i: usize, color: Color, args: core::fmt::Arguments| {
+            if i < MAX_PANEL_LINES {
+                let mut line = Line::new();
+                let _ = line.write_fmt(args);
+                lines[i] = Some((line, color));
+            }
+        };
+        let game = &*self.game;
+        let size = game.size();
+
+        put(0, ui::TEXT, format_args!("GoOS"));
+        let mut komi = Line::new();
+        write_half_points(&mut komi, game.komi_half() as i32);
+        put(1, ui::DIM_TEXT, format_args!("{size}x{size}   komi {}", komi.as_str()));
+        match game.phase() {
+            Phase::Playing => put(3, ui::TEXT, format_args!("{} to play", name(game.to_move()))),
+            Phase::Scoring => put(3, ui::ACCENT, format_args!("Scoring: mark dead stones")),
+            Phase::Finished => put(3, ui::ACCENT, format_args!("Game over")),
+        }
+        put(4, ui::DIM_TEXT, format_args!("Move {}", game.move_number()));
+        put(
+            5,
+            ui::DIM_TEXT,
+            format_args!("Captures  B {}  W {}", game.captures(Player::Black), game.captures(Player::White)),
+        );
+        if let Some(n) = &self.notice {
+            put(7, ui::WARNING, format_args!("{}", n.text.as_str()));
+        } else if let (Phase::Playing, true, Some((who, Move::Pass))) =
+            (game.phase(), game.passes() > 0, game.last_move())
+        {
+            put(7, ui::ACCENT, format_args!("{} passed", name(who)));
+        }
+        if let Some(s) = score {
+            put(9, ui::TEXT, format_args!("Black  {}", s.black));
+            put(10, ui::TEXT, format_args!("White  {} + {} komi", s.white, komi.as_str()));
+            let mut result = Line::new();
+            write_result(&mut result, s, game.phase() == Phase::Finished);
+            put(11, ui::ACCENT, format_args!("{}", result.as_str()));
+        }
+
+        let help: &[&str] = match game.phase() {
+            Phase::Playing => &["Arrows/WASD  move", "Space/Enter  place", "P pass   U undo", "N  new game"],
+            Phase::Scoring => &["Space  mark dead group", "Enter  confirm score", "Esc  resume play", "U undo   N new game"],
+            Phase::Finished => &["U  back to scoring", "N  new game"],
+        };
+        // Help goes at the bottom of the panel, below the score lines; it's
+        // left out if the panel is too short.
+        const FIRST_FREE_LINE: usize = 13;
+        let rows = self.layout.panel_lines().min(MAX_PANEL_LINES);
+        if rows >= FIRST_FREE_LINE + help.len() {
+            for (i, text) in help.iter().enumerate() {
+                put(rows - help.len() + i, ui::DIM_TEXT, format_args!("{text}"));
+            }
+        }
+
+        for (i, line) in lines.iter().enumerate().take(rows) {
+            let changed = match (line, &self.panel[i]) {
+                (Some((a, ca)), Some((b, cb))) => a.as_str() != b.as_str() || ca != cb,
+                (None, None) => false,
+                _ => true,
+            };
+            if changed {
+                let (text, color) = line.as_ref().map_or(("", ui::TEXT), |(t, c)| (t.as_str(), *c));
+                let font: Font = if i == 0 { self.layout.title_font } else { self.layout.text_font };
+                ui::panel_line(&mut self.screen, &self.layout, i, text, font, color);
+                self.panel[i] = line.as_ref().map(|(t, c)| (copy_line(t), *c));
+            }
+        }
+    }
+}
+
+fn point_view(game: &Game, cursor: Point, score: Option<&Score>, p: Point) -> PointView {
+    let stone = match game.board().get(p) {
+        Cell::Stone(c) => Some(c),
+        Cell::Empty => None,
+    };
+    let playing = game.phase() == Phase::Playing;
+    let is_cursor = p == cursor && game.phase() != Phase::Finished;
+    PointView {
+        stone,
+        dead: stone.is_some() && game.is_dead(p),
+        territory: score.and_then(|s| s.owner(p)),
+        last_move: matches!(game.last_move(), Some((_, Move::Play(q))) if q == p),
+        cursor: is_cursor,
+        ghost: if is_cursor && playing && stone.is_none() { Some(game.to_move()) } else { None },
+    }
+}
+
+fn index(p: Point) -> usize {
+    p.row as usize * MAX_SIZE + p.col as usize
+}
+
+fn name(player: Player) -> &'static str {
+    match player {
+        Player::Black => "Black",
+        Player::White => "White",
+    }
+}
+
+/// Go coordinate such as "D4" (columns skip I, row 1 is the bottom).
+fn coordinate(p: Point, size: usize) -> TextBuf<4> {
+    let mut text = TextBuf::new();
+    let _ = write!(text, "{}{}", COLUMNS[p.col as usize] as char, size - p.row as usize);
+    text
+}
+
+/// Writes a half-point count such as 15 as "7.5".
+fn write_half_points(out: &mut impl Write, half: i32) {
+    let _ = if half % 2 == 0 { write!(out, "{}", half / 2) } else { write!(out, "{}.5", half / 2) };
+}
+
+fn write_result(out: &mut Line, score: &Score, finished: bool) {
+    let margin = score.margin_half();
+    let Some(winner) = score.winner() else {
+        let _ = out.write_str("Draw");
+        return;
+    };
+    let _ = write!(out, "{} {} by ", name(winner), if finished { "wins" } else { "leads" });
+    write_half_points(out, margin.abs());
+}
+
+fn copy_line(line: &Line) -> Line {
+    let mut copy = Line::new();
+    let _ = copy.write_str(line.as_str());
+    copy
+}
