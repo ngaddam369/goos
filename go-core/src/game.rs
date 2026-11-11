@@ -136,6 +136,11 @@ impl Game {
         self.komi_half
     }
 
+    /// Sets komi in half points (15 = 7.5).
+    pub fn set_komi_half(&mut self, komi_half: u16) {
+        self.komi_half = komi_half;
+    }
+
     pub fn is_dead(&self, p: Point) -> bool {
         self.dead.contains(p)
     }

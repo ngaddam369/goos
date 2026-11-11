@@ -9,3 +9,12 @@ panic = "abort"
 
 [profile.release]
 panic = "abort"
+
+# The kernel reaches the runner as an artifact *build* dependency, so cargo
+# compiles it (and its dependencies) with the build-override profile, which
+# is unoptimised by default.
+[profile.release.build-override]
+opt-level = 3
+
+[profile.dev.build-override]
+opt-level = 3

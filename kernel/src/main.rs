@@ -46,7 +46,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             }
         }
         app.update(now);
-        idle();
+        if !app.busy() {
+            idle();
+        }
     }
 }
 

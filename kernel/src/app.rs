@@ -88,6 +88,8 @@ pub struct App {
     clock_mark: u64,
     /// Seconds shown on the running clock at the last render.
     shown_secs: u64,
+    /// When to next refresh the "thinking" progress line.
+    next_progress: u64,
 }
 
 impl App {
@@ -114,6 +116,7 @@ impl App {
             clocks: [0; 2],
             clock_mark: 0,
             shown_secs: 0,
+            next_progress: 0,
         }
     }
 
@@ -184,8 +187,8 @@ impl App {
             }
             Action::Pass if phase == Phase::Playing => self.pass(),
             Action::Undo => {
-                self.bot.cancel();
                 if self.game.undo() {
+                    self.bot.cancel();
                     // Against the computer, go back to the human's turn.
                     while self.game.phase() == Phase::Playing && self.computer_to_move() && self.game.undo() {}
                     serial_println!("undo");
@@ -205,6 +208,17 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// It's the computer's turn.
+    fn computer_turn(&self) -> bool {
+        self.mode == Mode::Game && self.game.phase() == Phase::Playing && self.computer_to_move()
+    }
+
+    /// The computer is thinking: the main loop should keep calling
+    /// `update` instead of sleeping.
+    pub fn busy(&self) -> bool {
+        self.computer_turn() && self.bot.computing()
     }
 
     fn computer_to_move(&self) -> bool {
@@ -253,16 +267,17 @@ impl App {
     pub fn update(&mut self, now: u64) {
         self.sound.update(now);
 
-        if self.mode == Mode::Game
-            && self.game.phase() == Phase::Playing
-            && self.computer_to_move()
-            && let Some(mv) = self.bot.think(&self.game, now)
-        {
-            match mv {
-                Move::Play(p) => self.play(p, now),
-                Move::Pass => self.pass(),
+        if self.computer_turn() {
+            match self.bot.think(&self.game, now) {
+                Some(Move::Play(p)) => self.play(p, now),
+                Some(Move::Pass) => self.pass(),
+                None => {}
             }
-            self.dirty = true;
+            // Refresh the playout counter a few times a second.
+            if now >= self.next_progress {
+                self.next_progress = now + TICK_HZ / 4;
+                self.dirty = true;
+            }
         }
 
         // Only the player to move uses time, and only during play.
@@ -395,7 +410,7 @@ impl App {
         put(1, ui::DIM_TEXT, format_args!("{size}x{size}   komi {}{versus}", komi.as_str()));
         match game.phase() {
             Phase::Playing if self.opponent == Opponent::Computer(game.to_move()) => {
-                put(3, ui::TEXT, format_args!("{} (computer) thinking...", name(game.to_move())))
+                put(3, ui::TEXT, format_args!("{} thinking... {}", name(game.to_move()), self.bot.playouts()))
             }
             Phase::Playing => put(3, ui::TEXT, format_args!("{} to play", name(game.to_move()))),
             Phase::Scoring => put(3, ui::ACCENT, format_args!("Scoring: mark dead stones")),
