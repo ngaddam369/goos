@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+# A newer push to the same ref supersedes the one in flight — don't pay for both.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Incremental compilation is wasted on a fresh runner and bloats the cache it has to save.
+  CARGO_INCREMENTAL: 0
+
+# The jobs are independent — no `needs:` — so they all start at once. The toolchain
+# (pinned nightly, rust-src, llvm-tools and the kernel targets) comes from
+# rust-toolchain.toml. `rustflags: ""` stops the setup action's default `-D warnings`
+# from leaking into the bootloader's own nested builds; clippy gets `-D warnings`
+# explicitly instead.
+
+jobs:
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          rustflags: ""
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          rustflags: ""
+      # The kernel builds for x86_64-unknown-none (forced in its manifest), so
+      # linting the whole workspace covers both the bare-metal and host crates.
+      - name: clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          rustflags: ""
+      # Builds the kernel and turns it into the BIOS and UEFI disk images
+      # (runner/build.rs); booting them needs QEMU, which CI doesn't run.
+      - name: Build (release)
+        run: cargo build --locked --release
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          rustflags: ""
+      # Only the rules crate is host-testable; the long strength matches are #[ignore]d.
+      - name: Test go-core
+        run: cargo test --locked -p go-core
