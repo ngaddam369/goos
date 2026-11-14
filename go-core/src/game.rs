@@ -68,7 +68,14 @@ impl Game {
             phase: Phase::Playing,
             dead: PointSet::new(),
             komi_half: DEFAULT_KOMI_HALF,
-            history: [Snapshot { board, to_move: Color::Black, passes: 0, last: None, move_number: 0, ko: None }; HISTORY],
+            history: [Snapshot {
+                board,
+                to_move: Color::Black,
+                passes: 0,
+                last: None,
+                move_number: 0,
+                ko: None,
+            }; HISTORY],
             history_len: 0,
         }
     }
@@ -128,7 +135,11 @@ impl Game {
         // moves made from the start are those of snapshots 1.. plus the
         // move that led to the current position.
         let current = (self.history_len > 0).then_some(self.last).flatten();
-        self.history[..self.history_len].iter().skip(1).filter_map(|s| s.last).chain(current)
+        self.history[..self.history_len]
+            .iter()
+            .skip(1)
+            .filter_map(|s| s.last)
+            .chain(current)
     }
 
     /// Moves (including passes) made so far.
@@ -193,7 +204,11 @@ impl Game {
         let earlier = &self.history[..self.history_len];
         let repeats = |s: &Snapshot| s.board.hash() == next.hash() && s.board.same_stones(&next);
         if let Some(i) = earlier.iter().rposition(repeats) {
-            return Err(if i + 1 == self.history_len { IllegalMove::Ko } else { IllegalMove::Superko });
+            return Err(if i + 1 == self.history_len {
+                IllegalMove::Ko
+            } else {
+                IllegalMove::Superko
+            });
         }
         Ok((next, info))
     }
@@ -278,7 +293,11 @@ impl Game {
         let group = self.board.group(p);
         let mark = !self.dead.contains(p);
         for q in group.iter() {
-            if mark { self.dead.insert(q) } else { self.dead.remove(q) }
+            if mark {
+                self.dead.insert(q)
+            } else {
+                self.dead.remove(q)
+            }
         }
         true
     }
@@ -384,7 +403,14 @@ mod tests {
         game.pass().unwrap();
         game.play(p(4, 4)).unwrap();
         let moves: Vec<_> = game.moves().collect();
-        assert_eq!(moves, vec![(B, Move::Play(p(2, 1))), (W, Move::Pass), (B, Move::Play(p(4, 4)))]);
+        assert_eq!(
+            moves,
+            vec![
+                (B, Move::Play(p(2, 1))),
+                (W, Move::Pass),
+                (B, Move::Play(p(4, 4)))
+            ]
+        );
         assert_eq!(game.start_position(), (start, B));
         game.undo();
         assert_eq!(game.moves().count(), 2);
@@ -404,7 +430,11 @@ mod tests {
         game.resume();
         assert_eq!(game.phase(), Phase::Playing);
         game.pass().unwrap();
-        assert_eq!(game.phase(), Phase::Playing, "the pass count restarts after resuming");
+        assert_eq!(
+            game.phase(),
+            Phase::Playing,
+            "the pass count restarts after resuming"
+        );
     }
 
     #[test]

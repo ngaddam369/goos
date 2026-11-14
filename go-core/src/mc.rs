@@ -83,9 +83,17 @@ impl FlatMc {
             let i = self.next;
             self.next = (self.next + 1) % self.count;
             let mut board = self.root;
-            let Ok(info) = board.play(self.candidates[i], self.color) else { continue };
+            let Ok(info) = board.play(self.candidates[i], self.color) else {
+                continue;
+            };
             let limit = playout_limit(&board);
-            if !playout(&mut board, self.color.opponent(), info.ko, &mut self.rng, limit) {
+            if !playout(
+                &mut board,
+                self.color.opponent(),
+                info.ko,
+                &mut self.rng,
+                limit,
+            ) {
                 continue; // never finished (endless ko): no verdict
             }
             self.visits[i] += 1;
@@ -121,7 +129,9 @@ impl FlatMc {
         let mut ties = 1;
         for i in 1..self.count {
             let ((wa, va), (wb, vb)) = (score(i), score(best));
-            let order = (wa * vb).cmp(&(wb * va)).then(self.visits[i].cmp(&self.visits[best]));
+            let order = (wa * vb)
+                .cmp(&(wb * va))
+                .then(self.visits[i].cmp(&self.visits[best]));
             match order {
                 core::cmp::Ordering::Greater => {
                     best = i;
@@ -225,8 +235,13 @@ mod tests {
         let mut mc = FlatMc::new(7);
         mc.start(&game);
         mc.step(25 * 400);
-        let (Move::Play(m), rate) = mc.best() else { panic!("should not pass") };
-        assert!((1..=3).contains(&m.col) && (1..=3).contains(&m.row), "edge move {m:?} ({rate}‰)");
+        let (Move::Play(m), rate) = mc.best() else {
+            panic!("should not pass")
+        };
+        assert!(
+            (1..=3).contains(&m.col) && (1..=3).contains(&m.row),
+            "edge move {m:?} ({rate}‰)"
+        );
     }
 
     #[test]
@@ -262,7 +277,11 @@ mod tests {
         let games = 10;
         for g in 0..games {
             let mut game = Box::new(Game::new(9));
-            let mc_color = if g % 2 == 0 { Color::Black } else { Color::White };
+            let mc_color = if g % 2 == 0 {
+                Color::Black
+            } else {
+                Color::White
+            };
             while game.phase() == Phase::Playing && game.move_number() < 300 {
                 let mv = if game.to_move() == mc_color {
                     mc.start(&game);

@@ -33,13 +33,28 @@ impl Font {
 
 /// Draws `text` with its top-left corner at (x, y), blending the glyphs'
 /// anti-aliased edges into whatever is already on screen.
-pub fn draw_text(canvas: &mut impl Canvas, x: usize, y: usize, text: &str, font: Font, color: Color) {
+pub fn draw_text(
+    canvas: &mut impl Canvas,
+    x: usize,
+    y: usize,
+    text: &str,
+    font: Font,
+    color: Color,
+) {
     draw_text_scaled(canvas, x, y, text, font, color, 1);
 }
 
 /// Like `draw_text`, with every glyph pixel drawn as a `scale` x `scale`
 /// block (for big titles).
-pub fn draw_text_scaled(canvas: &mut impl Canvas, x: usize, y: usize, text: &str, font: Font, color: Color, scale: usize) {
+pub fn draw_text_scaled(
+    canvas: &mut impl Canvas,
+    x: usize,
+    y: usize,
+    text: &str,
+    font: Font,
+    color: Color,
+    scale: usize,
+) {
     let mut cx = x;
     for ch in text.chars() {
         let glyph = get_raster(ch, font.weight, font.height)
@@ -48,7 +63,12 @@ pub fn draw_text_scaled(canvas: &mut impl Canvas, x: usize, y: usize, text: &str
             for (gy, row) in glyph.rows().enumerate() {
                 for (gx, &intensity) in row.iter().enumerate() {
                     for (sx, sy) in (0..scale * scale).map(|i| (i % scale, i / scale)) {
-                        canvas.blend_pixel(cx + gx * scale + sx, y + gy * scale + sy, color, intensity);
+                        canvas.blend_pixel(
+                            cx + gx * scale + sx,
+                            y + gy * scale + sy,
+                            color,
+                            intensity,
+                        );
                     }
                 }
             }
@@ -58,7 +78,14 @@ pub fn draw_text_scaled(canvas: &mut impl Canvas, x: usize, y: usize, text: &str
 }
 
 /// Draws `text` horizontally and vertically centred on (cx, cy).
-pub fn draw_text_centered(canvas: &mut impl Canvas, cx: usize, cy: usize, text: &str, font: Font, color: Color) {
+pub fn draw_text_centered(
+    canvas: &mut impl Canvas,
+    cx: usize,
+    cy: usize,
+    text: &str,
+    font: Font,
+    color: Color,
+) {
     let x = cx.saturating_sub(font.text_width(text) / 2);
     let y = cy.saturating_sub(font.line_height() / 2);
     draw_text(canvas, x, y, text, font, color);
@@ -73,7 +100,10 @@ pub struct TextBuf<const N: usize> {
 
 impl<const N: usize> TextBuf<N> {
     pub const fn new() -> Self {
-        TextBuf { buf: [0; N], len: 0 }
+        TextBuf {
+            buf: [0; N],
+            len: 0,
+        }
     }
 
     pub fn as_str(&self) -> &str {

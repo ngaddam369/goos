@@ -11,7 +11,11 @@ use crate::rng::Rng;
 /// (at most one opponent diagonal in the middle of the board, none on the
 /// edge or in the corner). Filling such a point only ever hurts.
 pub fn is_eye(board: &Board, p: Point, color: Color) -> bool {
-    if board.get(p) != Cell::Empty || board.neighbors(p).any(|n| board.get(n) != Cell::Stone(color)) {
+    if board.get(p) != Cell::Empty
+        || board
+            .neighbors(p)
+            .any(|n| board.get(n) != Cell::Stone(color))
+    {
         return false;
     }
     let size = board.size() as isize;
@@ -26,7 +30,11 @@ pub fn is_eye(board: &Board, p: Point, color: Color) -> bool {
             opponent += 1;
         }
     }
-    if off_board > 0 { opponent == 0 } else { opponent <= 1 }
+    if off_board > 0 {
+        opponent == 0
+    } else {
+        opponent <= 1
+    }
 }
 
 /// A uniformly random empty point for which `accept` holds, or `None`.
@@ -36,7 +44,11 @@ pub fn is_eye(board: &Board, p: Point, color: Color) -> bool {
 /// all miss, lazy Fisher-Yates over the empty points: pick a random
 /// candidate; if it's rejected, swap it out of the list and pick again, so
 /// each point is tested at most once.
-fn random_empty_point(board: &Board, rng: &mut Rng, mut accept: impl FnMut(Point) -> bool) -> Option<Point> {
+fn random_empty_point(
+    board: &Board,
+    rng: &mut Rng,
+    mut accept: impl FnMut(Point) -> bool,
+) -> Option<Point> {
     let size = board.size();
     for _ in 0..16 {
         let i = rng.below(size * size);
@@ -69,14 +81,22 @@ fn random_empty_point(board: &Board, rng: &mut Rng, mut accept: impl FnMut(Point
 /// retaking `ko`) and doesn't fill one of its own eyes. `None` means the
 /// player should pass.
 pub fn random_move(board: &Board, color: Color, ko: Option<Point>, rng: &mut Rng) -> Option<Point> {
-    random_empty_point(board, rng, |p| Some(p) != ko && board.is_legal(p, color) && !is_eye(board, p, color))
+    random_empty_point(board, rng, |p| {
+        Some(p) != ko && board.is_legal(p, color) && !is_eye(board, p, color)
+    })
 }
 
 /// Plays random moves from `board` (with `to_move` to play) until both
 /// sides pass, or `max_moves` turns (moves and passes) have gone by.
 /// Returns whether the game really finished; if not (e.g. an endless ko
 /// fight), the final board shouldn't be scored.
-pub fn playout(board: &mut Board, mut to_move: Color, mut ko: Option<Point>, rng: &mut Rng, max_moves: usize) -> bool {
+pub fn playout(
+    board: &mut Board,
+    mut to_move: Color,
+    mut ko: Option<Point>,
+    rng: &mut Rng,
+    max_moves: usize,
+) -> bool {
     let mut passes = 0;
     for _ in 0..max_moves {
         match random_move(board, to_move, ko, rng) {
@@ -136,7 +156,11 @@ pub fn playout_winner(board: &Board, komi_half: u16) -> Color {
     let (black, white) = playout_area(board);
     // With half-point komi there are no draws; with integer komi a draw
     // counts as a white win.
-    if 2 * black as i32 > 2 * white as i32 + komi_half as i32 { Color::Black } else { Color::White }
+    if 2 * black as i32 > 2 * white as i32 + komi_half as i32 {
+        Color::Black
+    } else {
+        Color::White
+    }
 }
 
 /// Whether the player to move should just pass: the opponent has passed
@@ -154,8 +178,10 @@ pub fn random_bot(game: &Game, rng: &mut Rng) -> Move {
     }
     let board = game.board();
     let color = game.to_move();
-    random_empty_point(board, rng, |p| board.is_legal(p, color) && !is_eye(board, p, color) && game.check(p).is_ok())
-        .map_or(Move::Pass, Move::Play)
+    random_empty_point(board, rng, |p| {
+        board.is_legal(p, color) && !is_eye(board, p, color) && game.check(p).is_ok()
+    })
+    .map_or(Move::Pass, Move::Play)
 }
 
 #[cfg(test)]
@@ -182,7 +208,10 @@ mod tests {
         );
         assert!(is_eye(&board, p(0, 0), B), "corner eye");
         assert!(is_eye(&board, p(2, 0), B), "edge eye");
-        assert!(is_eye(&board, p(1, 2), B), "one opponent diagonal is fine in the middle");
+        assert!(
+            is_eye(&board, p(1, 2), B),
+            "one opponent diagonal is fine in the middle"
+        );
         assert!(!is_eye(&board, p(4, 4), B), "not surrounded");
         assert!(!is_eye(&board, p(0, 0), W), "eyes belong to one colour");
         let board = diagram(
@@ -193,7 +222,10 @@ mod tests {
             . X O . .
             . . . . .",
         );
-        assert!(!is_eye(&board, p(1, 2), B), "two opponent diagonals: false eye");
+        assert!(
+            !is_eye(&board, p(1, 2), B),
+            "two opponent diagonals: false eye"
+        );
     }
 
     #[test]
@@ -244,7 +276,10 @@ mod tests {
         for _ in 0..50 {
             let mut board = Board::new(9);
             let limit = playout_limit(&board);
-            assert!(playout(&mut board, B, None, &mut rng, limit), "playout should end by two passes");
+            assert!(
+                playout(&mut board, B, None, &mut rng, limit),
+                "playout should end by two passes"
+            );
             // Neither side has a move left that isn't an own eye.
             assert_eq!(random_move(&board, B, None, &mut rng), None);
             assert_eq!(random_move(&board, W, None, &mut rng), None);
@@ -314,7 +349,10 @@ mod tests {
             assert_eq!(m.row, 6);
             counts[m.col as usize - 3] += 1;
         }
-        assert!(counts.iter().all(|&c| (850..1150).contains(&c)), "{counts:?}");
+        assert!(
+            counts.iter().all(|&c| (850..1150).contains(&c)),
+            "{counts:?}"
+        );
     }
 
     #[test]
@@ -347,7 +385,11 @@ mod tests {
                 }
             };
         }
-        assert_eq!(game.phase(), Phase::Scoring, "the game should end by passing");
+        assert_eq!(
+            game.phase(),
+            Phase::Scoring,
+            "the game should end by passing"
+        );
     }
 
     /// Run with `cargo test -p go-core --release -- --ignored --nocapture`.
@@ -362,6 +404,9 @@ mod tests {
             playout(&mut board, B, None, &mut rng, 243);
         }
         let per = start.elapsed() / n;
-        println!("9x9 playout: {per:?} each, {:.0}/s", 1.0 / per.as_secs_f64());
+        println!(
+            "9x9 playout: {per:?} each, {:.0}/s",
+            1.0 / per.as_secs_f64()
+        );
     }
 }

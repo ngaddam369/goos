@@ -1,7 +1,9 @@
 //! Keyboard input: a lock-free queue of raw scancodes filled by the IRQ1
 //! handler, decoded into keys in the main loop.
 
-use pc_keyboard::{DecodedKey, HandleControl, KeyCode, PS2Keyboard, ScancodeSet1, layouts::Us104Key};
+use pc_keyboard::{
+    DecodedKey, HandleControl, KeyCode, PS2Keyboard, ScancodeSet1, layouts::Us104Key,
+};
 
 use crate::queue::ByteQueue;
 

@@ -37,7 +37,10 @@ pub fn init() {
     // SAFETY: COM1 is the standard serial port on PC hardware and QEMU, and
     // nothing else in the kernel touches these I/O ports.
     // Printing runs with interrupts off, so use the fastest common baud rate.
-    let config = Config { baud_rate: BaudRate::Baud115200, ..Config::DEFAULT };
+    let config = Config {
+        baud_rate: BaudRate::Baud115200,
+        ..Config::DEFAULT
+    };
     let port = unsafe { Uart16550Tty::new_port(COM1, config) };
     // If there's no working UART, printing is silently skipped.
     *SERIAL.lock() = port.ok();

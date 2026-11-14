@@ -35,9 +35,17 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial::init();
     serial_println!("GoOS booted");
 
-    let fb = boot_info.framebuffer.as_mut().expect("no framebuffer from bootloader");
+    let fb = boot_info
+        .framebuffer
+        .as_mut()
+        .expect("no framebuffer from bootloader");
     let screen = Screen::new(fb);
-    serial_println!("framebuffer {}x{} {:?}", screen.width(), screen.height(), screen.format());
+    serial_println!(
+        "framebuffer {}x{} {:?}",
+        screen.width(),
+        screen.height(),
+        screen.format()
+    );
 
     let has_mouse = interrupts::init();
     serial_println!("mouse: {}", if has_mouse { "found" } else { "none" });

@@ -17,7 +17,10 @@ pub use board::{Board, Cell, Color, IllegalMove, MAX_SIZE, MoveInfo, Point, Poin
 pub use game::{Game, Move, Phase};
 pub use mc::FlatMc;
 pub use mcts::{Mcts, Node};
-pub use playout::{is_eye, playout, playout_area, playout_limit, playout_winner, random_bot, random_move, should_pass};
+pub use playout::{
+    is_eye, playout, playout_area, playout_limit, playout_winner, random_bot, random_move,
+    should_pass,
+};
 pub use rng::Rng;
 pub use score::{Score, score};
 pub use sgf::{SgfError, read_sgf, write_sgf};

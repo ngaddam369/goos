@@ -74,7 +74,11 @@ impl Layout {
         let avail = screen_h.min(screen_w.saturating_sub(MIN_PANEL));
         let margin = avail / 40;
         let label_font = Font::new(
-            if avail / (size + 1) >= 56 { RasterHeight::Size24 } else { RasterHeight::Size16 },
+            if avail / (size + 1) >= 56 {
+                RasterHeight::Size24
+            } else {
+                RasterHeight::Size16
+            },
             FontWeight::Regular,
         );
         // Labels live in a band outside the edge points' squares.
@@ -107,7 +111,11 @@ impl Layout {
             panel_y: board_y,
             panel_w,
             label_font,
-            text_font: if big { big_font } else { Font::new(RasterHeight::Size24, FontWeight::Regular) },
+            text_font: if big {
+                big_font
+            } else {
+                Font::new(RasterHeight::Size24, FontWeight::Regular)
+            },
             title_font: Font::new(RasterHeight::Size32, FontWeight::Bold),
         }
     }
@@ -122,7 +130,10 @@ impl Layout {
 
     /// Screen position of the intersection at (col, row); row 0 is the top.
     pub fn intersection(&self, col: usize, row: usize) -> (usize, usize) {
-        (self.origin_x + col * self.cell, self.origin_y + row * self.cell)
+        (
+            self.origin_x + col * self.cell,
+            self.origin_y + row * self.cell,
+        )
     }
 
     fn stone_radius(&self) -> isize {
@@ -159,7 +170,13 @@ fn is_hoshi(size: usize, col: usize, row: usize) -> bool {
 /// Draws the whole screen: background, board, labels and every point.
 pub fn draw_board(screen: &mut Screen, layout: &Layout, point: impl Fn(usize, usize) -> PointView) {
     screen.clear(BACKGROUND);
-    screen.fill_rect(layout.board_x, layout.board_y, layout.board_px, layout.board_px, WOOD);
+    screen.fill_rect(
+        layout.board_x,
+        layout.board_y,
+        layout.board_px,
+        layout.board_px,
+        WOOD,
+    );
     if layout.show_labels {
         draw_labels(screen, layout);
     }
@@ -197,18 +214,34 @@ pub fn draw_point(screen: &mut Screen, layout: &Layout, col: usize, row: usize, 
     let half = cell / 2;
     let last = layout.size - 1;
     // The outermost lines are drawn a little heavier.
-    let h_width = if row == 0 || row == last { layout.line + 2 } else { layout.line };
-    let v_width = if col == 0 || col == last { layout.line + 2 } else { layout.line };
+    let h_width = if row == 0 || row == last {
+        layout.line + 2
+    } else {
+        layout.line
+    };
+    let v_width = if col == 0 || col == last {
+        layout.line + 2
+    } else {
+        layout.line
+    };
 
     let mut tile = TILE.lock();
     tile.reset(cell, cell, WOOD);
     // The intersection sits at (half, half) inside the tile. Lines are
     // centred on it and stop there at the board edge.
     let h_start = if col == 0 { half - v_width / 2 } else { 0 };
-    let h_end = if col == last { half + v_width / 2 + 1 } else { cell };
+    let h_end = if col == last {
+        half + v_width / 2 + 1
+    } else {
+        cell
+    };
     tile.hline(h_start, half - h_width / 2, h_end - h_start, h_width, LINE);
     let v_start = if row == 0 { half - h_width / 2 } else { 0 };
-    let v_end = if row == last { half + h_width / 2 + 1 } else { cell };
+    let v_end = if row == last {
+        half + h_width / 2 + 1
+    } else {
+        cell
+    };
     tile.vline(half - v_width / 2, v_start, v_end - v_start, v_width, LINE);
 
     let c = half as isize;
@@ -217,7 +250,14 @@ pub fn draw_point(screen: &mut Screen, layout: &Layout, col: usize, row: usize, 
         tile.fill_circle(c, c, (cell / 10).max(2) as isize, LINE);
     }
     if let Some(stone) = view.stone {
-        draw_stone(&mut *tile, c, c, r, stone, if view.dead { 100 } else { 255 });
+        draw_stone(
+            &mut *tile,
+            c,
+            c,
+            r,
+            stone,
+            if view.dead { 100 } else { 255 },
+        );
     } else if let Some(ghost) = view.ghost {
         draw_stone(&mut *tile, c, c, r, ghost, 90);
     }
@@ -228,7 +268,13 @@ pub fn draw_point(screen: &mut Screen, layout: &Layout, col: usize, row: usize, 
             Player::White => (WHITE_STONE, WHITE_EDGE),
         };
         tile.fill_rect(half - side / 2, half - side / 2, side, side, edge);
-        tile.fill_rect(half - side / 2 + 1, half - side / 2 + 1, side - 2, side - 2, fill);
+        tile.fill_rect(
+            half - side / 2 + 1,
+            half - side / 2 + 1,
+            side - 2,
+            side - 2,
+            fill,
+        );
     }
     if view.last_move {
         tile.fill_circle(c, c, (r / 3).max(2), LAST_MOVE);
@@ -257,7 +303,14 @@ fn draw_cursor(canvas: &mut impl Canvas, cell: usize) {
 
 /// Draws a stone in a single pass, so a translucent (dead) stone blends
 /// cleanly with what's underneath.
-pub fn draw_stone(canvas: &mut impl Canvas, cx: isize, cy: isize, r: isize, stone: Player, alpha: u8) {
+pub fn draw_stone(
+    canvas: &mut impl Canvas,
+    cx: isize,
+    cy: isize,
+    r: isize,
+    stone: Player,
+    alpha: u8,
+) {
     let rim_width = (r / 14).max(1);
     let (rim, body) = match stone {
         Player::Black => (BLACK_EDGE, BLACK_STONE),
@@ -286,7 +339,14 @@ pub fn draw_stone(canvas: &mut impl Canvas, cx: isize, cy: isize, r: isize, ston
 
 /// Redraws one line of text in the status panel, replacing what was there.
 /// Text is clipped to the panel.
-pub fn panel_line(screen: &mut Screen, layout: &Layout, line: usize, text: &str, font: Font, color: Color) {
+pub fn panel_line(
+    screen: &mut Screen,
+    layout: &Layout,
+    line: usize,
+    text: &str,
+    font: Font,
+    color: Color,
+) {
     let line_h = layout.panel_line_height();
     let mut tile = TILE.lock();
     tile.reset(layout.panel_w, line_h, BACKGROUND);
@@ -296,7 +356,14 @@ pub fn panel_line(screen: &mut Screen, layout: &Layout, line: usize, text: &str,
 
 /// Draws one line of text centred horizontally on the screen, replacing a
 /// band of background `line_h` pixels tall at `y`.
-pub fn centered_line(screen: &mut Screen, y: usize, line_h: usize, text: &str, font: Font, color: Color) {
+pub fn centered_line(
+    screen: &mut Screen,
+    y: usize,
+    line_h: usize,
+    text: &str,
+    font: Font,
+    color: Color,
+) {
     centered_line_scaled(screen, y, line_h, text, font, color, 1);
 }
 

@@ -48,7 +48,10 @@ impl Bot {
     pub fn new(seed: u64) -> Self {
         let tree = TREE.try_lock().expect("only one Bot may exist");
         let nodes: &'static mut [Node; TREE_NODES] = MutexGuard::leak(tree);
-        Bot { search: Mcts::new(nodes, seed), thinking: None }
+        Bot {
+            search: Mcts::new(nodes, seed),
+            thinking: None,
+        }
     }
 
     /// Drops any thinking in progress (after undo, new game...).
@@ -64,15 +67,27 @@ impl Bot {
 
     /// Playouts run for the current decision.
     pub fn playouts(&self) -> u32 {
-        if self.thinking.is_some() { self.search.playouts() } else { 0 }
+        if self.thinking.is_some() {
+            self.search.playouts()
+        } else {
+            0
+        }
     }
 
     /// Thinks for one slice; returns the computer's move once it has decided.
     pub fn think(&mut self, game: &Game, now: u64) -> Option<Move> {
         let position = (game.move_number(), game.board().hash());
-        if self.thinking.as_ref().is_none_or(|t| t.position != position) {
+        if self
+            .thinking
+            .as_ref()
+            .is_none_or(|t| t.position != position)
+        {
             self.search.start(game);
-            let think_for = if self.search.decided() { 0 } else { budget(game.size()) };
+            let think_for = if self.search.decided() {
+                0
+            } else {
+                budget(game.size())
+            };
             self.thinking = Some(Thinking {
                 position,
                 started: now,

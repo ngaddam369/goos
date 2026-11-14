@@ -49,7 +49,11 @@ pub struct Mouse {
 
 impl Mouse {
     pub const fn new() -> Self {
-        Mouse { packet: [0; 3], len: 0, dropped: 0 }
+        Mouse {
+            packet: [0; 3],
+            len: 0,
+            dropped: 0,
+        }
     }
 
     pub fn next_event(&mut self) -> Option<MouseEvent> {

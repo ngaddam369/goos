@@ -13,7 +13,11 @@ pub struct ByteQueue<const N: usize> {
 
 impl<const N: usize> ByteQueue<N> {
     pub const fn new() -> Self {
-        ByteQueue { buf: [const { AtomicU8::new(0) }; N], head: AtomicUsize::new(0), tail: AtomicUsize::new(0) }
+        ByteQueue {
+            buf: [const { AtomicU8::new(0) }; N],
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
+        }
     }
 
     /// Adds a byte; drops it (returning false) if the queue is full.

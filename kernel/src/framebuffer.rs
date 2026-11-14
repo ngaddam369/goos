@@ -21,8 +21,14 @@ impl Color {
 
     /// Mixes `self` over `under`; `alpha` 255 is fully `self`.
     pub fn blend_over(self, under: Color, alpha: u8) -> Color {
-        let mix = |a: u8, b: u8| ((a as u32 * alpha as u32 + b as u32 * (255 - alpha as u32)) / 255) as u8;
-        Color::rgb(mix(self.r, under.r), mix(self.g, under.g), mix(self.b, under.b))
+        let mix = |a: u8, b: u8| {
+            ((a as u32 * alpha as u32 + b as u32 * (255 - alpha as u32)) / 255) as u8
+        };
+        Color::rgb(
+            mix(self.r, under.r),
+            mix(self.g, under.g),
+            mix(self.b, under.b),
+        )
     }
 }
 
@@ -153,7 +159,11 @@ impl Screen {
                 let gray = (c.r as u16 * 77 + c.g as u16 * 150 + c.b as u16 * 29) >> 8;
                 [gray as u8, 0, 0, 0]
             }
-            PixelFormat::Unknown { red_position, green_position, blue_position } => {
+            PixelFormat::Unknown {
+                red_position,
+                green_position,
+                blue_position,
+            } => {
                 let v = (c.r as u32) << red_position
                     | (c.g as u32) << green_position
                     | (c.b as u32) << blue_position;
@@ -168,9 +178,17 @@ impl Screen {
             PixelFormat::Rgb => Color::rgb(px[0], px[1], px[2]),
             PixelFormat::Bgr => Color::rgb(px[2], px[1], px[0]),
             PixelFormat::U8 => Color::rgb(px[0], px[0], px[0]),
-            PixelFormat::Unknown { red_position, green_position, blue_position } => {
+            PixelFormat::Unknown {
+                red_position,
+                green_position,
+                blue_position,
+            } => {
                 let v = u32::from_le_bytes(px);
-                Color::rgb((v >> red_position) as u8, (v >> green_position) as u8, (v >> blue_position) as u8)
+                Color::rgb(
+                    (v >> red_position) as u8,
+                    (v >> green_position) as u8,
+                    (v >> blue_position) as u8,
+                )
             }
             _ => Color::rgb(px[0], px[1], px[2]),
         }
@@ -262,14 +280,20 @@ pub struct Tile {
 }
 
 /// The one shared scratch tile (it's too big for the stack).
-pub static TILE: Mutex<Tile> = Mutex::new(Tile { buf: [Color::rgb(0, 0, 0); TILE_PIXELS], w: 0, h: 0 });
+pub static TILE: Mutex<Tile> = Mutex::new(Tile {
+    buf: [Color::rgb(0, 0, 0); TILE_PIXELS],
+    w: 0,
+    h: 0,
+});
 
 impl Tile {
     /// Resizes the tile and fills it with `background`. The height is
     /// reduced if `w * h` doesn't fit.
     pub fn reset(&mut self, w: usize, h: usize, background: Color) {
         self.w = w.min(TILE_PIXELS);
-        self.h = TILE_PIXELS.checked_div(self.w).map_or(0, |max_h| h.min(max_h));
+        self.h = TILE_PIXELS
+            .checked_div(self.w)
+            .map_or(0, |max_h| h.min(max_h));
         self.buf[..self.w * self.h].fill(background);
     }
 }

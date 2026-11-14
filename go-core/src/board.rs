@@ -44,7 +44,10 @@ pub struct Point {
 impl Point {
     pub const fn new(col: usize, row: usize) -> Point {
         debug_assert!(col < MAX_SIZE && row < MAX_SIZE);
-        Point { col: col as u8, row: row as u8 }
+        Point {
+            col: col as u8,
+            row: row as u8,
+        }
     }
 
     pub(crate) const fn index(self) -> usize {
@@ -159,7 +162,12 @@ impl Board {
     /// An empty board. Sizes 1..=19 work; the game uses 9, 13 and 19.
     pub const fn new(size: usize) -> Board {
         assert!(size >= 1 && size <= MAX_SIZE);
-        Board { size: size as u8, cells: [Cell::Empty; AREA], hash: 0, captures: [0; 2] }
+        Board {
+            size: size as u8,
+            cells: [Cell::Empty; AREA],
+            hash: 0,
+            captures: [0; 2],
+        }
     }
 
     pub const fn size(&self) -> usize {
@@ -172,7 +180,11 @@ impl Board {
 
     /// The cell at `p` (empty if `p` is off the board).
     pub fn get(&self, p: Point) -> Cell {
-        if self.contains(p) { self.cells[p.index()] } else { Cell::Empty }
+        if self.contains(p) {
+            self.cells[p.index()]
+        } else {
+            Cell::Empty
+        }
     }
 
     pub fn hash(&self) -> u64 {
@@ -193,10 +205,15 @@ impl Board {
     /// The up-to-four on-board neighbours of `p`.
     pub fn neighbors(&self, p: Point) -> impl Iterator<Item = Point> + use<> {
         let (col, row, size) = (p.col as isize, p.row as isize, self.size() as isize);
-        [(col - 1, row), (col + 1, row), (col, row - 1), (col, row + 1)]
-            .into_iter()
-            .filter(move |&(c, r)| c >= 0 && r >= 0 && c < size && r < size)
-            .map(|(c, r)| Point::new(c as usize, r as usize))
+        [
+            (col - 1, row),
+            (col + 1, row),
+            (col, row - 1),
+            (col, row + 1),
+        ]
+        .into_iter()
+        .filter(move |&(c, r)| c >= 0 && r >= 0 && c < size && r < size)
+        .map(|(c, r)| Point::new(c as usize, r as usize))
     }
 
     /// Puts a stone down (or removes one) without any rule checks.
@@ -301,7 +318,8 @@ impl Board {
             return Err(IllegalMove::Suicide);
         }
         // Ko: one stone captured by a lone stone left in atari.
-        let ko = (captured == 1 && own_liberties == 1 && own_group.len() == 1).then_some(last_captured);
+        let ko =
+            (captured == 1 && own_liberties == 1 && own_group.len() == 1).then_some(last_captured);
         next.captures[color.index()] += captured;
         *self = next;
         Ok(MoveInfo { captured, ko })
@@ -507,7 +525,11 @@ mod tests {
                 for color in [B, W] {
                     let mut copy = board;
                     let expected = copy.play(pt, color).is_ok();
-                    assert_eq!(board.is_legal(pt, color), expected, "{pt:?} {color:?} in {text}");
+                    assert_eq!(
+                        board.is_legal(pt, color),
+                        expected,
+                        "{pt:?} {color:?} in {text}"
+                    );
                 }
             }
         }

@@ -50,7 +50,13 @@ pub struct Node {
 const NO_CHILDREN: u32 = u32::MAX;
 
 impl Node {
-    pub const EMPTY: Node = Node { point: Point::new(0, 0), child_count: 0, first_child: 0, visits: 0, half_wins: 0 };
+    pub const EMPTY: Node = Node {
+        point: Point::new(0, 0),
+        child_count: 0,
+        first_child: 0,
+        visits: 0,
+        half_wins: 0,
+    };
 
     fn children(&self) -> core::ops::Range<usize> {
         let first = self.first_child as usize;
@@ -67,7 +73,11 @@ impl Node {
 fn log2_fixed(x: u64) -> u64 {
     let int = 63 - x.leading_zeros() as u64;
     // Mantissa in [ONE, 2 * ONE).
-    let mut m = if int >= 16 { x >> (int - 16) } else { x << (16 - int) };
+    let mut m = if int >= 16 {
+        x >> (int - 16)
+    } else {
+        x << (16 - int)
+    };
     let mut frac = 0;
     for bit in (0..16).rev() {
         m = m * m / ONE;
@@ -147,7 +157,9 @@ impl<'a> Mcts<'a> {
         if !self.pass {
             // Root moves are checked against superko as well.
             let board = self.root_board;
-            self.expand(0, &board, self.root_color, self.root_ko, |p| game.check(p).is_ok());
+            self.expand(0, &board, self.root_color, self.root_ko, |p| {
+                game.check(p).is_ok()
+            });
         }
     }
 
@@ -167,7 +179,14 @@ impl<'a> Mcts<'a> {
     /// `board` that doesn't fill its own eye or retake `ko`, in random
     /// order. If there are none, or they don't fit in the pool, the node
     /// stays a leaf for good.
-    fn expand(&mut self, node: usize, board: &Board, color: Color, ko: Option<Point>, mut allowed: impl FnMut(Point) -> bool) {
+    fn expand(
+        &mut self,
+        node: usize,
+        board: &Board,
+        color: Color,
+        ko: Option<Point>,
+        mut allowed: impl FnMut(Point) -> bool,
+    ) {
         self.nodes[node].first_child = NO_CHILDREN;
         self.nodes[node].child_count = 0;
         let first = self.used;
@@ -177,7 +196,10 @@ impl<'a> Mcts<'a> {
                 if first + count == self.nodes.len() {
                     return; // pool full
                 }
-                self.nodes[first + count] = Node { point: p, ..Node::EMPTY };
+                self.nodes[first + count] = Node {
+                    point: p,
+                    ..Node::EMPTY
+                };
                 count += 1;
             }
         }
@@ -239,31 +261,43 @@ impl<'a> Mcts<'a> {
                 path[depth] = node as u32;
                 depth += 1;
                 // Children were generated as legal moves for this position.
-                ko = board.play(self.nodes[node].point, color).map_or(None, |info| info.ko);
+                ko = board
+                    .play(self.nodes[node].point, color)
+                    .map_or(None, |info| info.ko);
                 color = color.opponent();
             }
 
             // Expansion: grow the tree at well-visited leaves.
-            if !self.nodes[node].expanded() && self.nodes[node].visits >= EXPAND_AFTER && depth < MAX_DEPTH {
+            if !self.nodes[node].expanded()
+                && self.nodes[node].visits >= EXPAND_AFTER
+                && depth < MAX_DEPTH
+            {
                 self.expand(node, &board, color, ko, |_| true);
                 if self.nodes[node].child_count > 0 {
                     node = self.select(node);
                     path[depth] = node as u32;
                     depth += 1;
-                    ko = board.play(self.nodes[node].point, color).map_or(None, |info| info.ko);
+                    ko = board
+                        .play(self.nodes[node].point, color)
+                        .map_or(None, |info| info.ko);
                     color = color.opponent();
                 }
             }
 
             // Simulation.
             let limit = playout_limit(&board);
-            let winner = playout(&mut board, color, ko, &mut self.rng, limit).then(|| playout_winner(&board, self.komi_half));
+            let winner = playout(&mut board, color, ko, &mut self.rng, limit)
+                .then(|| playout_winner(&board, self.komi_half));
 
             // Backpropagation. Path node i holds a move by the root player
             // when i is even, by the opponent when odd.
             self.nodes[0].visits += 1;
             for (i, &n) in path[..depth].iter().enumerate() {
-                let mover = if i % 2 == 0 { self.root_color } else { self.root_color.opponent() };
+                let mover = if i % 2 == 0 {
+                    self.root_color
+                } else {
+                    self.root_color.opponent()
+                };
                 let result = match winner {
                     Some(w) if w == mover => 2,
                     Some(_) => 0,
@@ -328,9 +362,18 @@ mod tests {
     #[test]
     fn fixed_point_logarithms() {
         use core::f64::consts::{LN_2, LN_10};
-        for (x, expected) in [(1u64, 0.0f64), (2, LN_2), (10, LN_10), (1000, 6.907_755), (123_456, 11.723_637)] {
+        for (x, expected) in [
+            (1u64, 0.0f64),
+            (2, LN_2),
+            (10, LN_10),
+            (1000, 6.907_755),
+            (123_456, 11.723_637),
+        ] {
             let got = ln_fixed(x) as f64 / ONE as f64;
-            assert!((got - expected).abs() < 0.001, "ln({x}) = {got}, expected {expected}");
+            assert!(
+                (got - expected).abs() < 0.001,
+                "ln({x}) = {got}, expected {expected}"
+            );
         }
         assert_eq!(log2_fixed(1 << 20), 20 << 16);
         for n in [1u64, 2, 3, 100, 4095, 4096, 1_000_000] {
@@ -447,13 +490,25 @@ mod tests {
         assert_eq!(mcts.best().0, Move::Pass);
     }
 
-    fn play_match(games: usize, mut mcts_move: impl FnMut(&Game) -> Move, mut other: impl FnMut(&Game) -> Move) -> usize {
+    fn play_match(
+        games: usize,
+        mut mcts_move: impl FnMut(&Game) -> Move,
+        mut other: impl FnMut(&Game) -> Move,
+    ) -> usize {
         let mut wins = 0;
         for g in 0..games {
             let mut game = Box::new(Game::new(9));
-            let mcts_color = if g % 2 == 0 { Color::Black } else { Color::White };
+            let mcts_color = if g % 2 == 0 {
+                Color::Black
+            } else {
+                Color::White
+            };
             while game.phase() == Phase::Playing && game.move_number() < 300 {
-                let mv = if game.to_move() == mcts_color { mcts_move(&game) } else { other(&game) };
+                let mv = if game.to_move() == mcts_color {
+                    mcts_move(&game)
+                } else {
+                    other(&game)
+                };
                 match mv {
                     Move::Play(pt) => {
                         game.play(pt).unwrap();
@@ -512,7 +567,11 @@ mod bench {
         mcts.start(&game);
         let t = std::time::Instant::now();
         mcts.step(5000);
-        println!("MCTS: {:?} per iteration, {} nodes", t.elapsed() / 5000, mcts.tree_size());
+        println!(
+            "MCTS: {:?} per iteration, {} nodes",
+            t.elapsed() / 5000,
+            mcts.tree_size()
+        );
 
         let mut flat = FlatMc::new(1);
         flat.start(&game);

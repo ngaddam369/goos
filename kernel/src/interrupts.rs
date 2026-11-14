@@ -20,7 +20,8 @@ pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 
 // SAFETY: vectors 32..48 don't overlap CPU exceptions.
-static PICS: Mutex<ChainedPics> = Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
+static PICS: Mutex<ChainedPics> =
+    Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -44,7 +45,8 @@ static IDT: LazyLock<InterruptDescriptorTable> = LazyLock::new(|| {
     let mut idt = InterruptDescriptorTable::new();
     idt.breakpoint.set_handler_fn(breakpoint_handler);
     idt.page_fault.set_handler_fn(page_fault_handler);
-    idt.general_protection_fault.set_handler_fn(general_protection_handler);
+    idt.general_protection_fault
+        .set_handler_fn(general_protection_handler);
     idt.invalid_opcode.set_handler_fn(invalid_opcode_handler);
     // SAFETY: the IST index refers to a valid stack set up in gdt.rs.
     unsafe {
@@ -148,7 +150,11 @@ fn take_ps2_byte() {
     }
     // SAFETY: the output buffer is full and this is the only reader.
     let byte = unsafe { ps2::read_data_port() };
-    if status & ps2::FROM_AUX != 0 { mouse::push_byte(byte) } else { input::push_scancode(byte) }
+    if status & ps2::FROM_AUX != 0 {
+        mouse::push_byte(byte)
+    } else {
+        input::push_scancode(byte)
+    }
 }
 
 extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {

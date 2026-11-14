@@ -37,11 +37,17 @@ pub struct Pointer {
 
 impl Pointer {
     pub const fn new() -> Self {
-        Pointer { shown_at: None, saved: [Color::rgb(0, 0, 0); WIDTH * HEIGHT] }
+        Pointer {
+            shown_at: None,
+            saved: [Color::rgb(0, 0, 0); WIDTH * HEIGHT],
+        }
     }
 
     fn pixels() -> impl Iterator<Item = (usize, usize, u8)> {
-        ARROW.iter().enumerate().flat_map(|(y, row)| row.iter().enumerate().map(move |(x, &c)| (x, y, c)))
+        ARROW
+            .iter()
+            .enumerate()
+            .flat_map(|(y, row)| row.iter().enumerate().map(move |(x, &c)| (x, y, c)))
     }
 
     /// Draws the arrow with its tip at (x, y), remembering what it covers.
@@ -59,7 +65,9 @@ impl Pointer {
 
     /// Puts back what was under the arrow.
     pub fn hide(&mut self, screen: &mut Screen) {
-        let Some((x, y)) = self.shown_at.take() else { return };
+        let Some((x, y)) = self.shown_at.take() else {
+            return;
+        };
         for (dx, dy, c) in Self::pixels() {
             if c != b' ' {
                 screen.put_pixel(x + dx, y + dy, self.saved[dy * WIDTH + dx]);

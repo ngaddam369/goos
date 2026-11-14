@@ -71,7 +71,12 @@ pub fn score(board: &Board, dead: &PointSet, komi_half: u16) -> Score {
             Cell::Empty => {}
         }
     }
-    Score { black: area[0], white: area[1], komi_half, owner }
+    Score {
+        black: area[0],
+        white: area[1],
+        komi_half,
+        owner,
+    }
 }
 
 #[cfg(test)]
@@ -118,7 +123,11 @@ mod tests {
         assert_eq!(s.komi_half, DEFAULT_KOMI_HALF);
         assert_eq!(s.margin_half(), -33);
         assert_eq!(s.winner(), Some(Color::White));
-        assert_eq!(s.owner(Point::new(1, 4)), Some(Color::Black), "dead stone's point is black territory");
+        assert_eq!(
+            s.owner(Point::new(1, 4)),
+            Some(Color::Black),
+            "dead stone's point is black territory"
+        );
         assert_eq!(s.owner(Point::new(8, 0)), Some(Color::White));
         assert_eq!(s.owner(Point::new(3, 0)), None, "stones are not territory");
     }

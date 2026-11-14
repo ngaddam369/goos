@@ -7,7 +7,11 @@ pub struct Rng(u64);
 impl Rng {
     /// Any seed works; zero is replaced since xorshift would get stuck.
     pub const fn new(seed: u64) -> Rng {
-        Rng(if seed == 0 { 0x9E37_79B9_7F4A_7C15 } else { seed })
+        Rng(if seed == 0 {
+            0x9E37_79B9_7F4A_7C15
+        } else {
+            seed
+        })
     }
 
     pub fn next_u64(&mut self) -> u64 {

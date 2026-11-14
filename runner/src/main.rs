@@ -26,11 +26,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const QEMU: &str = "qemu-system-x86_64";
 /// Where distributions install the combined OVMF (UEFI) firmware image.
 const OVMF_PATHS: &[&str] = &[
-    "/usr/share/edk2/x64/OVMF.4m.fd",    // Arch (edk2-ovmf)
-    "/usr/share/ovmf/OVMF.fd",           // Debian/Ubuntu (ovmf)
+    "/usr/share/edk2/x64/OVMF.4m.fd", // Arch (edk2-ovmf)
+    "/usr/share/ovmf/OVMF.fd",        // Debian/Ubuntu (ovmf)
     "/usr/share/OVMF/OVMF.fd",
-    "/usr/share/edk2/ovmf/OVMF.fd",      // some Fedora versions
-    "/usr/share/qemu/ovmf-x86_64.bin",   // openSUSE
+    "/usr/share/edk2/ovmf/OVMF.fd",    // some Fedora versions
+    "/usr/share/qemu/ovmf-x86_64.bin", // openSUSE
 ];
 
 /// Lines the kernel prints around game records, and when it's ready for input.
@@ -65,7 +65,9 @@ fn main() {
                 }
             }
             other => {
-                eprintln!("unknown argument {other:?}; expected `bios`, `uefi`, `load FILE` or `images`");
+                eprintln!(
+                    "unknown argument {other:?}; expected `bios`, `uefi`, `load FILE` or `images`"
+                );
                 exit(2);
             }
         }
@@ -87,30 +89,45 @@ fn main() {
     cmd.args(["-m", "256M", "-serial", "stdio", "-no-reboot"]);
 
     if uefi {
-        let firmware = env::var("GOOS_OVMF")
-            .ok()
-            .or_else(|| OVMF_PATHS.iter().find(|p| Path::new(p).exists()).map(|p| p.to_string()));
+        let firmware = env::var("GOOS_OVMF").ok().or_else(|| {
+            OVMF_PATHS
+                .iter()
+                .find(|p| Path::new(p).exists())
+                .map(|p| p.to_string())
+        });
         let Some(firmware) = firmware else {
             eprintln!("no UEFI firmware found; install OVMF or set GOOS_OVMF to OVMF.fd");
             exit(1);
         };
         cmd.arg("-bios").arg(firmware);
-        cmd.arg("-drive").arg(format!("format=raw,file={}", env!("UEFI_PATH")));
+        cmd.arg("-drive")
+            .arg(format!("format=raw,file={}", env!("UEFI_PATH")));
     } else {
-        cmd.arg("-drive").arg(format!("format=raw,file={}", env!("BIOS_PATH")));
+        cmd.arg("-drive")
+            .arg(format!("format=raw,file={}", env!("BIOS_PATH")));
     }
 
     if debug {
-        cmd.args(["-accel", "tcg", "-d", "int,cpu_reset", "-D", "qemu.log", "-no-shutdown"]);
+        cmd.args([
+            "-accel",
+            "tcg",
+            "-d",
+            "int,cpu_reset",
+            "-D",
+            "qemu.log",
+            "-no-shutdown",
+        ]);
     } else if kvm_available() {
         cmd.args(["-accel", "kvm", "-cpu", "host"]);
     }
 
     if headless {
-        let monitor = env::var("GOOS_MONITOR")
-            .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../target/goos-monitor.sock").into());
+        let monitor = env::var("GOOS_MONITOR").unwrap_or_else(|_| {
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../target/goos-monitor.sock").into()
+        });
         cmd.args(["-display", "none"]);
-        cmd.arg("-monitor").arg(format!("unix:{monitor},server,nowait"));
+        cmd.arg("-monitor")
+            .arg(format!("unix:{monitor},server,nowait"));
     } else {
         cmd.args(["-display", "gtk,zoom-to-fit=on"]);
     }
@@ -122,7 +139,10 @@ fn main() {
         cmd.stdin(Stdio::piped());
     }
 
-    eprintln!("launching QEMU ({} boot, audio: {audio})", if uefi { "UEFI" } else { "BIOS" });
+    eprintln!(
+        "launching QEMU ({} boot, audio: {audio})",
+        if uefi { "UEFI" } else { "BIOS" }
+    );
     let mut child = cmd.spawn().expect("failed to run QEMU");
     let stdout = child.stdout.take().expect("piped stdout");
     let stdin = child.stdin.take();
@@ -174,9 +194,15 @@ fn watch_serial(stdout: ChildStdout, mut stdin: Option<ChildStdin>, mut load: Op
 /// Writes a record to a new file `goos-<seconds>[-n].sgf`, never
 /// overwriting an existing one.
 fn save_record(sgf: &str) {
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
     for n in 0..100 {
-        let path = if n == 0 { format!("goos-{secs}.sgf") } else { format!("goos-{secs}-{n}.sgf") };
+        let path = if n == 0 {
+            format!("goos-{secs}.sgf")
+        } else {
+            format!("goos-{secs}-{n}.sgf")
+        };
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(mut file) => {
                 match file.write_all(sgf.as_bytes()) {
@@ -220,5 +246,9 @@ fn audio_backend() -> String {
 }
 
 fn kvm_available() -> bool {
-    OpenOptions::new().read(true).write(true).open("/dev/kvm").is_ok()
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/kvm")
+        .is_ok()
 }

@@ -7,16 +7,18 @@
 
 use core::fmt::Write;
 
-use go_core::{Cell, Color as Player, Game, MAX_SIZE, Move, Phase, Point, Score, SgfError, read_sgf, write_sgf};
+use go_core::{
+    Cell, Color as Player, Game, MAX_SIZE, Move, Phase, Point, Score, SgfError, read_sgf, write_sgf,
+};
 use spin::{Mutex, MutexGuard};
 
 use crate::bot::{self, Bot};
 use crate::font::{Font, TextBuf};
 use crate::framebuffer::{Canvas, Color, Screen};
 use crate::input::Action;
+use crate::interrupts::TICK_HZ;
 use crate::mouse::MouseEvent;
 use crate::pointer::Pointer;
-use crate::interrupts::TICK_HZ;
 use crate::serial::SerialOut;
 use crate::serial_println;
 use crate::sound::{Effect, Sound};
@@ -36,7 +38,11 @@ enum Opponent {
     Computer(Player),
 }
 
-const OPPONENTS: [Opponent; 3] = [Opponent::Human, Opponent::Computer(Player::White), Opponent::Computer(Player::Black)];
+const OPPONENTS: [Opponent; 3] = [
+    Opponent::Human,
+    Opponent::Computer(Player::White),
+    Opponent::Computer(Player::Black),
+];
 /// How long an illegal-move message stays up.
 const NOTICE_TICKS: u64 = TICK_HZ * 3 / 2;
 const MAX_PANEL_LINES: usize = 24;
@@ -90,7 +96,15 @@ enum Received {
 
 impl SgfReceiver {
     const fn new() -> Self {
-        SgfReceiver { buf: [0; SGF_MAX], len: 0, active: false, discarding: false, depth: 0, in_value: false, escaped: false }
+        SgfReceiver {
+            buf: [0; SGF_MAX],
+            len: 0,
+            active: false,
+            discarding: false,
+            depth: 0,
+            in_value: false,
+            escaped: false,
+        }
     }
 
     fn reset(&mut self) {
@@ -243,7 +257,9 @@ impl App {
     /// a left click acts like Space on that point.
     pub fn handle_mouse(&mut self, event: MouseEvent, now: u64) {
         let (w, h) = (self.screen.width() as isize, self.screen.height() as isize);
-        let (x, y) = self.mouse_at.map_or((w / 2, h / 2), |(x, y)| (x as isize, y as isize));
+        let (x, y) = self
+            .mouse_at
+            .map_or((w / 2, h / 2), |(x, y)| (x as isize, y as isize));
         let x = (x + event.dx as isize).clamp(0, w - 1) as usize;
         let y = (y - event.dy as isize).clamp(0, h - 1) as usize;
         self.mouse_at = Some((x, y));
@@ -254,7 +270,10 @@ impl App {
         if self.mode != Mode::Game {
             return;
         }
-        let hovered = self.layout.point_at(x, y).map(|(col, row)| Point::new(col, row));
+        let hovered = self
+            .layout
+            .point_at(x, y)
+            .map(|(col, row)| Point::new(col, row));
         // Follow the pointer only when it reaches a new intersection, so a
         // nudge doesn't undo cursor moves made with the keyboard.
         if let Some(p) = hovered
@@ -314,10 +333,14 @@ impl App {
             Action::Down => self.move_cursor(0, 1),
             Action::Left => self.move_cursor(-1, 0),
             Action::Right => self.move_cursor(1, 0),
-            Action::Place | Action::Confirm | Action::Pass if phase == Phase::Playing && self.computer_to_move() => {
+            Action::Place | Action::Confirm | Action::Pass
+                if phase == Phase::Playing && self.computer_to_move() =>
+            {
                 self.set_timed_notice("The computer is thinking", now);
             }
-            Action::Place | Action::Confirm if phase == Phase::Playing => self.play(self.cursor, now),
+            Action::Place | Action::Confirm if phase == Phase::Playing => {
+                self.play(self.cursor, now)
+            }
             Action::Place if phase == Phase::Scoring => {
                 self.game.toggle_dead(self.cursor);
             }
@@ -338,7 +361,10 @@ impl App {
                 if self.game.undo() {
                     self.bot.cancel();
                     // Against the computer, go back to the human's turn.
-                    while self.game.phase() == Phase::Playing && self.computer_to_move() && self.game.undo() {}
+                    while self.game.phase() == Phase::Playing
+                        && self.computer_to_move()
+                        && self.game.undo()
+                    {}
                     serial_println!("undo");
                     self.notice = None;
                 } else {
@@ -384,9 +410,18 @@ impl App {
         match self.game.play(p) {
             Ok(info) => {
                 let coord = coordinate(p, self.game.size());
-                serial_println!("{} {} (captured {})", name(player), coord.as_str(), info.captured);
+                serial_println!(
+                    "{} {} (captured {})",
+                    name(player),
+                    coord.as_str(),
+                    info.captured
+                );
                 self.notice = None;
-                let effect = if info.captured > 0 { Effect::Capture } else { Effect::Click };
+                let effect = if info.captured > 0 {
+                    Effect::Capture
+                } else {
+                    Effect::Click
+                };
                 self.sound.play(effect, now);
             }
             Err(e) => {
@@ -405,8 +440,16 @@ impl App {
         let mut text = Line::new();
         let _ = text.write_str(message);
         // Warnings are brief; other news stays up a little longer.
-        let duration = if color == ui::WARNING { NOTICE_TICKS } else { 2 * NOTICE_TICKS };
-        self.notice = Some(Notice { text, color, until: now + duration });
+        let duration = if color == ui::WARNING {
+            NOTICE_TICKS
+        } else {
+            2 * NOTICE_TICKS
+        };
+        self.notice = Some(Notice {
+            text,
+            color,
+            until: now + duration,
+        });
     }
 
     /// Sends the game record (SGF) over serial between marker lines.
@@ -439,9 +482,19 @@ impl App {
             Err(_) => false,
         };
         match result {
-            Ok(()) => serial_println!("SGF: loaded {}x{} game, {} moves", self.game.size(), self.game.size(), self.game.move_number()),
-            Err(SgfError::Illegal(n, e)) => serial_println!("SGF: move {n} is illegal ({}); loaded the moves before it", e.message()),
-            Err(SgfError::OutOfTurn(n)) => serial_println!("SGF: move {n} is out of turn; loaded the moves before it"),
+            Ok(()) => serial_println!(
+                "SGF: loaded {}x{} game, {} moves",
+                self.game.size(),
+                self.game.size(),
+                self.game.move_number()
+            ),
+            Err(SgfError::Illegal(n, e)) => serial_println!(
+                "SGF: move {n} is illegal ({}); loaded the moves before it",
+                e.message()
+            ),
+            Err(SgfError::OutOfTurn(n)) => {
+                serial_println!("SGF: move {n} is out of turn; loaded the moves before it")
+            }
             Err(e) => serial_println!("SGF: not loaded: {}", e.message()),
         }
         if loaded {
@@ -555,11 +608,21 @@ impl App {
             ui::centered_line_scaled(screen, title_y, title_h, "GoOS", title, ui::TEXT, scale);
             let r = (title_h * 3 / 10) as isize;
             let reach = (title.text_width("GoOS") * scale / 2) as isize + 2 * r;
-            let (cx, cy) = ((screen.width() / 2) as isize, (title_y + title_h / 2) as isize);
+            let (cx, cy) = (
+                (screen.width() / 2) as isize,
+                (title_y + title_h / 2) as isize,
+            );
             ui::draw_stone(screen, cx - reach, cy, r, Player::Black, 255);
             ui::draw_stone(screen, cx + reach, cy, r, Player::White, 255);
             ui::centered_line(screen, top, line_h, "Go on bare metal", text, ui::DIM_TEXT);
-            ui::centered_line(screen, top + 2 * line_h, line_h, "Board size", text, ui::TEXT);
+            ui::centered_line(
+                screen,
+                top + 2 * line_h,
+                line_h,
+                "Board size",
+                text,
+                ui::TEXT,
+            );
             ui::centered_line(screen, top + 4 * line_h, line_h, "Opponent", text, ui::TEXT);
         }
 
@@ -567,9 +630,20 @@ impl App {
         let mut value = |row: usize, args: core::fmt::Arguments| {
             let mut line = Line::new();
             let selected = row == self.start_row;
-            let _ = if selected { write!(line, "<  {args}  >") } else { write!(line, "{args}") };
+            let _ = if selected {
+                write!(line, "<  {args}  >")
+            } else {
+                write!(line, "{args}")
+            };
             let color = if selected { ui::ACCENT } else { ui::TEXT };
-            ui::centered_line(screen, top + (3 + 2 * row) * line_h, line_h, line.as_str(), title, color);
+            ui::centered_line(
+                screen,
+                top + (3 + 2 * row) * line_h,
+                line_h,
+                line.as_str(),
+                title,
+                color,
+            );
         };
         let size = SIZES[self.size_choice];
         value(0, format_args!("{size} x {size}"));
@@ -606,7 +680,13 @@ impl App {
             for p in (0..size * size).map(|i| Point::new(i % size, i / size)) {
                 let view = point_view(&self.game, self.cursor, score.as_ref(), p);
                 if self.drawn[index(p)] != Some(view) {
-                    ui::draw_point(&mut self.screen, &self.layout, p.col as usize, p.row as usize, view);
+                    ui::draw_point(
+                        &mut self.screen,
+                        &self.layout,
+                        p.col as usize,
+                        p.row as usize,
+                        view,
+                    );
                     self.drawn[index(p)] = Some(view);
                 }
             }
@@ -630,13 +710,31 @@ impl App {
         put(0, ui::TEXT, format_args!("GoOS"));
         let mut komi = Line::new();
         write_half_points(&mut komi, game.komi_half() as i32);
-        let versus = if self.opponent == Opponent::Human { "" } else { "   vs computer" };
-        put(1, ui::DIM_TEXT, format_args!("{size}x{size}   komi {}{versus}", komi.as_str()));
+        let versus = if self.opponent == Opponent::Human {
+            ""
+        } else {
+            "   vs computer"
+        };
+        put(
+            1,
+            ui::DIM_TEXT,
+            format_args!("{size}x{size}   komi {}{versus}", komi.as_str()),
+        );
         match game.phase() {
-            Phase::Playing if self.opponent == Opponent::Computer(game.to_move()) => {
-                put(3, ui::TEXT, format_args!("{} thinking... {}", name(game.to_move()), self.bot.playouts()))
-            }
-            Phase::Playing => put(3, ui::TEXT, format_args!("{} to play", name(game.to_move()))),
+            Phase::Playing if self.opponent == Opponent::Computer(game.to_move()) => put(
+                3,
+                ui::TEXT,
+                format_args!(
+                    "{} thinking... {}",
+                    name(game.to_move()),
+                    self.bot.playouts()
+                ),
+            ),
+            Phase::Playing => put(
+                3,
+                ui::TEXT,
+                format_args!("{} to play", name(game.to_move())),
+            ),
             Phase::Scoring => put(3, ui::ACCENT, format_args!("Scoring: mark dead stones")),
             Phase::Finished => put(3, ui::ACCENT, format_args!("Game over")),
         }
@@ -644,12 +742,20 @@ impl App {
         put(
             5,
             ui::DIM_TEXT,
-            format_args!("Captures  B {}  W {}", game.captures(Player::Black), game.captures(Player::White)),
+            format_args!(
+                "Captures  B {}  W {}",
+                game.captures(Player::Black),
+                game.captures(Player::White)
+            ),
         );
         let (mut black, mut white) = (TextBuf::<12>::new(), TextBuf::<12>::new());
         write_clock(&mut black, self.clocks[0]);
         write_clock(&mut white, self.clocks[1]);
-        put(6, ui::DIM_TEXT, format_args!("Time  B {}  W {}", black.as_str(), white.as_str()));
+        put(
+            6,
+            ui::DIM_TEXT,
+            format_args!("Time  B {}  W {}", black.as_str(), white.as_str()),
+        );
         if let Some(n) = &self.notice {
             put(7, n.color, format_args!("{}", n.text.as_str()));
         } else if let (Phase::Playing, true, Some((who, Move::Pass))) =
@@ -659,15 +765,29 @@ impl App {
         }
         if let Some(s) = score {
             put(9, ui::TEXT, format_args!("Black  {}", s.black));
-            put(10, ui::TEXT, format_args!("White  {} + {} komi", s.white, komi.as_str()));
+            put(
+                10,
+                ui::TEXT,
+                format_args!("White  {} + {} komi", s.white, komi.as_str()),
+            );
             let mut result = Line::new();
             write_result(&mut result, s, game.phase() == Phase::Finished);
             put(11, ui::ACCENT, format_args!("{}", result.as_str()));
         }
 
         let help: &[&str] = match game.phase() {
-            Phase::Playing => &["Arrows/WASD  move", "Space/Enter  place", "P pass   U undo", "N new game  G save"],
-            Phase::Scoring => &["Space  mark dead group", "Enter  confirm score", "Esc  resume play", "U undo   N new game"],
+            Phase::Playing => &[
+                "Arrows/WASD  move",
+                "Space/Enter  place",
+                "P pass   U undo",
+                "N new game  G save",
+            ],
+            Phase::Scoring => &[
+                "Space  mark dead group",
+                "Enter  confirm score",
+                "Esc  resume play",
+                "U undo   N new game",
+            ],
             Phase::Finished => &["U  back to scoring", "N new game  G save"],
         };
         // Help goes at the bottom of the panel, below the score lines; it's
@@ -687,8 +807,14 @@ impl App {
                 _ => true,
             };
             if changed {
-                let (text, color) = line.as_ref().map_or(("", ui::TEXT), |(t, c)| (t.as_str(), *c));
-                let font: Font = if i == 0 { self.layout.title_font } else { self.layout.text_font };
+                let (text, color) = line
+                    .as_ref()
+                    .map_or(("", ui::TEXT), |(t, c)| (t.as_str(), *c));
+                let font: Font = if i == 0 {
+                    self.layout.title_font
+                } else {
+                    self.layout.text_font
+                };
                 ui::panel_line(&mut self.screen, &self.layout, i, text, font, color);
                 self.panel[i] = line.as_ref().map(|(t, c)| (copy_line(t), *c));
             }
@@ -709,7 +835,11 @@ fn point_view(game: &Game, cursor: Point, score: Option<&Score>, p: Point) -> Po
         territory: score.and_then(|s| s.owner(p)),
         last_move: matches!(game.last_move(), Some((_, Move::Play(q))) if q == p),
         cursor: is_cursor,
-        ghost: if is_cursor && playing && stone.is_none() { Some(game.to_move()) } else { None },
+        ghost: if is_cursor && playing && stone.is_none() {
+            Some(game.to_move())
+        } else {
+            None
+        },
     }
 }
 
@@ -727,20 +857,33 @@ fn name(player: Player) -> &'static str {
 /// Go coordinate such as "D4" (columns skip I, row 1 is the bottom).
 fn coordinate(p: Point, size: usize) -> TextBuf<4> {
     let mut text = TextBuf::new();
-    let _ = write!(text, "{}{}", COLUMNS[p.col as usize] as char, size - p.row as usize);
+    let _ = write!(
+        text,
+        "{}{}",
+        COLUMNS[p.col as usize] as char,
+        size - p.row as usize
+    );
     text
 }
 
 /// Writes a half-point count such as 15 as "7.5".
 fn write_half_points(out: &mut impl Write, half: i32) {
-    let _ = if half % 2 == 0 { write!(out, "{}", half / 2) } else { write!(out, "{}.5", half / 2) };
+    let _ = if half % 2 == 0 {
+        write!(out, "{}", half / 2)
+    } else {
+        write!(out, "{}.5", half / 2)
+    };
 }
 
 /// Writes a tick count as "m:ss" (or "h:mm:ss").
 fn write_clock(out: &mut impl Write, ticks: u64) {
     let secs = ticks / TICK_HZ;
     let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
-    let _ = if h > 0 { write!(out, "{h}:{m:02}:{s:02}") } else { write!(out, "{m}:{s:02}") };
+    let _ = if h > 0 {
+        write!(out, "{h}:{m:02}:{s:02}")
+    } else {
+        write!(out, "{m}:{s:02}")
+    };
 }
 
 fn write_result(out: &mut Line, score: &Score, finished: bool) {
@@ -749,7 +892,12 @@ fn write_result(out: &mut Line, score: &Score, finished: bool) {
         let _ = out.write_str("Draw");
         return;
     };
-    let _ = write!(out, "{} {} by ", name(winner), if finished { "wins" } else { "leads" });
+    let _ = write!(
+        out,
+        "{} {} by ",
+        name(winner),
+        if finished { "wins" } else { "leads" }
+    );
     write_half_points(out, margin.abs());
 }
 

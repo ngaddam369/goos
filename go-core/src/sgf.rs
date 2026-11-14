@@ -49,7 +49,11 @@ fn write_point(out: &mut impl Write, p: Point) -> fmt::Result {
 fn write_half_points(out: &mut impl Write, half: i32) -> fmt::Result {
     let sign = if half < 0 { "-" } else { "" };
     let half = half.abs();
-    if half % 2 == 0 { write!(out, "{sign}{}", half / 2) } else { write!(out, "{sign}{}.5", half / 2) }
+    if half % 2 == 0 {
+        write!(out, "{sign}{}", half / 2)
+    } else {
+        write!(out, "{sign}{}.5", half / 2)
+    }
 }
 
 fn color_letter(c: Color) -> char {
@@ -61,7 +65,11 @@ fn color_letter(c: Color) -> char {
 
 /// Writes `game` as an SGF game tree. A finished game gets its result.
 pub fn write_sgf(game: &Game, out: &mut impl Write) -> fmt::Result {
-    write!(out, "(;GM[1]FF[4]CA[UTF-8]AP[GoOS]RU[Chinese]SZ[{}]KM[", game.size())?;
+    write!(
+        out,
+        "(;GM[1]FF[4]CA[UTF-8]AP[GoOS]RU[Chinese]SZ[{}]KM[",
+        game.size()
+    )?;
     write_half_points(out, game.komi_half() as i32)?;
     out.write_char(']')?;
 
@@ -69,7 +77,10 @@ pub fn write_sgf(game: &Game, out: &mut impl Write) -> fmt::Result {
     let mut setup = false;
     for (prop, color) in [("AB", Color::Black), ("AW", Color::White)] {
         let mut first = true;
-        for p in start.points().filter(|&p| start.get(p) == Cell::Stone(color)) {
+        for p in start
+            .points()
+            .filter(|&p| start.get(p) == Cell::Stone(color))
+        {
             if first {
                 out.write_str(prop)?;
                 first = false;
@@ -114,8 +125,15 @@ pub fn write_sgf(game: &Game, out: &mut impl Write) -> fmt::Result {
 
 /// Calls `property(ident, value)` for each property value on the main line
 /// (the first variation at every branch), in order.
-fn parse(text: &[u8], mut property: impl FnMut(&[u8], &[u8]) -> Result<(), SgfError>) -> Result<(), SgfError> {
-    let mut i = text.iter().position(|&c| c == b'(').ok_or(SgfError::Syntax)? + 1;
+fn parse(
+    text: &[u8],
+    mut property: impl FnMut(&[u8], &[u8]) -> Result<(), SgfError>,
+) -> Result<(), SgfError> {
+    let mut i = text
+        .iter()
+        .position(|&c| c == b'(')
+        .ok_or(SgfError::Syntax)?
+        + 1;
     let mut ident_start = 0;
     let mut ident_end = 0;
     loop {
@@ -164,16 +182,25 @@ fn parse(text: &[u8], mut property: impl FnMut(&[u8], &[u8]) -> Result<(), SgfEr
 /// The upper-case letters of a property identifier (FF[3] style
 /// identifiers like `AddBlack` become `AB`).
 fn ident_is(ident: &[u8], name: &str) -> bool {
-    ident.iter().filter(|c| c.is_ascii_uppercase()).eq(name.as_bytes().iter())
+    ident
+        .iter()
+        .filter(|c| c.is_ascii_uppercase())
+        .eq(name.as_bytes().iter())
 }
 
 /// "19", or the FF[4] "columns:rows" form when the board is square.
 fn parse_size(value: &[u8]) -> Result<usize, SgfError> {
-    let text = core::str::from_utf8(value).map_err(|_| SgfError::Size)?.trim();
+    let text = core::str::from_utf8(value)
+        .map_err(|_| SgfError::Size)?
+        .trim();
     let (cols, rows) = text.split_once(':').unwrap_or((text, text));
     let cols: usize = cols.trim().parse().map_err(|_| SgfError::Size)?;
     let rows: usize = rows.trim().parse().map_err(|_| SgfError::Size)?;
-    if cols == rows && (1..=MAX_SIZE).contains(&cols) { Ok(cols) } else { Err(SgfError::Size) }
+    if cols == rows && (1..=MAX_SIZE).contains(&cols) {
+        Ok(cols)
+    } else {
+        Err(SgfError::Size)
+    }
 }
 
 /// Komi such as "7.5", "6", "0.5" or "-3" in half points (negative komi is
@@ -181,9 +208,16 @@ fn parse_size(value: &[u8]) -> Result<usize, SgfError> {
 fn parse_komi(value: &[u8]) -> u16 {
     let text = core::str::from_utf8(value).unwrap_or("").trim();
     let (int, frac) = text.split_once('.').unwrap_or((text, ""));
-    let Ok(int) = int.parse::<i32>() else { return 0 };
+    let Ok(int) = int.parse::<i32>() else {
+        return 0;
+    };
     let half = frac.bytes().next().is_some_and(|d| d >= b'5');
-    let value = int * 2 + if int < 0 || text.starts_with('-') { -(half as i32) } else { half as i32 };
+    let value = int * 2
+        + if int < 0 || text.starts_with('-') {
+            -(half as i32)
+        } else {
+            half as i32
+        };
     value.clamp(0, u16::MAX as i32) as u16
 }
 
@@ -195,14 +229,22 @@ fn parse_point(value: &[u8], size: usize) -> Result<Option<Point>, SgfError> {
         b"tt" if size <= 19 => Ok(None),
         &[c, r] if c.is_ascii_lowercase() && r.is_ascii_lowercase() => {
             let (col, row) = ((c - b'a') as usize, (r - b'a') as usize);
-            if col < size && row < size { Ok(Some(Point::new(col, row))) } else { Err(SgfError::Coordinate) }
+            if col < size && row < size {
+                Ok(Some(Point::new(col, row)))
+            } else {
+                Err(SgfError::Coordinate)
+            }
         }
         _ => Err(SgfError::Coordinate),
     }
 }
 
 /// Setup points: a single point or a rectangle "aa:cc".
-fn for_each_setup_point(value: &[u8], size: usize, mut f: impl FnMut(Point)) -> Result<(), SgfError> {
+fn for_each_setup_point(
+    value: &[u8],
+    size: usize,
+    mut f: impl FnMut(Point),
+) -> Result<(), SgfError> {
     let (a, b) = match value.iter().position(|&c| c == b':') {
         Some(i) => (&value[..i], &value[i + 1..]),
         None => (value, value),
@@ -273,7 +315,11 @@ pub fn read_sgf(text: &[u8], game: &mut Game) -> Result<(), SgfError> {
             };
             for_each_setup_point(value, size, |p| board.set(p, cell))?;
         } else if ident_is(ident, "B") || ident_is(ident, "W") {
-            let color = if ident_is(ident, "B") { Color::Black } else { Color::White };
+            let color = if ident_is(ident, "B") {
+                Color::Black
+            } else {
+                Color::White
+            };
             if !started {
                 start(game, &board, first_player.unwrap_or(color), komi_half);
                 started = true;
@@ -294,7 +340,12 @@ pub fn read_sgf(text: &[u8], game: &mut Game) -> Result<(), SgfError> {
         Ok(())
     })?;
     if !started {
-        start(game, &board, first_player.unwrap_or(Color::Black), komi_half);
+        start(
+            game,
+            &board,
+            first_player.unwrap_or(Color::Black),
+            komi_half,
+        );
     }
     Ok(())
 }
@@ -393,7 +444,11 @@ mod tests {
         assert_eq!(game.board().get(p(0, 1)), Cell::Stone(Color::Black));
         assert_eq!(game.board().get(p(3, 2)), Cell::Stone(Color::White));
         assert_eq!(game.board().get(p(2, 3)), Cell::Stone(Color::White));
-        assert_eq!(game.board().get(p(6, 6)), Cell::Empty, "second variation ignored");
+        assert_eq!(
+            game.board().get(p(6, 6)),
+            Cell::Empty,
+            "second variation ignored"
+        );
         assert_eq!(game.move_number(), 4);
     }
 
@@ -410,7 +465,12 @@ mod tests {
             (b"(;B[pp];SZ[9])", SgfError::Unsupported),
             (b"(;SZ[9:13])", SgfError::Size),
         ] {
-            assert_eq!(read_sgf(text, &mut game), Err(error), "{}", String::from_utf8_lossy(text));
+            assert_eq!(
+                read_sgf(text, &mut game),
+                Err(error),
+                "{}",
+                String::from_utf8_lossy(text)
+            );
             assert_eq!(game.move_number(), 1, "game must be untouched");
         }
     }
@@ -418,9 +478,15 @@ mod tests {
     #[test]
     fn stops_at_an_illegal_or_out_of_turn_move() {
         let mut game = Box::new(Game::new(9));
-        assert_eq!(read_sgf(b"(;SZ[9];B[ee];W[ee])", &mut game), Err(SgfError::Illegal(2, IllegalMove::Occupied)));
+        assert_eq!(
+            read_sgf(b"(;SZ[9];B[ee];W[ee])", &mut game),
+            Err(SgfError::Illegal(2, IllegalMove::Occupied))
+        );
         assert_eq!(game.move_number(), 1, "loaded up to the bad move");
-        assert_eq!(read_sgf(b"(;SZ[9];B[ee];B[cc])", &mut game), Err(SgfError::OutOfTurn(2)));
+        assert_eq!(
+            read_sgf(b"(;SZ[9];B[ee];B[cc])", &mut game),
+            Err(SgfError::OutOfTurn(2))
+        );
     }
 
     #[test]
@@ -429,7 +495,11 @@ mod tests {
         read_sgf(b"(;SZ[13:13]KM[0.5];B[gg])", &mut game).unwrap();
         assert_eq!((game.size(), game.komi_half()), (13, 1));
         game.reset(9);
-        assert_eq!(game.komi_half(), 15, "a new game gets the default komi back");
+        assert_eq!(
+            game.komi_half(),
+            15,
+            "a new game gets the default komi back"
+        );
     }
 
     #[test]
